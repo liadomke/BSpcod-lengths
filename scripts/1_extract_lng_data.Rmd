@@ -3,6 +3,8 @@ title: "1_extract_lng_data"
 author: "Lia Domke"
 date: "1/5/2026"
 output: html_document
+editor_options: 
+  chunk_output_type: console
 ---
 
 ```{r setup, include=FALSE}
@@ -12,9 +14,283 @@ knitr::opts_chunk$set(echo = TRUE)
 ## R Markdown
 
 ```{r}
-remotes::install_github("afsc-ema/EMAdownload", quiet = F, force = T, dependencies=TRUE, build_vignettes=TRUE)
+# detach("package:EMAdownload", unload = T)
+# remotes::install_github("afsc-ema/EMAdownload", quiet = F, force = T, dependencies=TRUE, build_vignettes=TRUE)
+# rm(list = c("evnt", "fsh", "event_parameters", "taxa"))
 
 
 library(EMAdownload)
+library(tidyverse)
+library(ggplot2)
+library(ggridges)
+library(ggmap)
+library(maps)
+library(mapdata)
+library(mapproj)
+# mapping
+# library(marmap)
+# library(PBSmapping)
+```
+
+custom graph theme
+```{r}
+plot_theme <- function() {
+  theme_bw(base_size = 16, base_family = "Avenir") %+replace%
+    theme(panel.background  = element_blank(),
+            plot.background = element_rect(fill="white", colour=NA), 
+            legend.background = element_rect(fill="transparent", colour=NA),
+            legend.key = element_rect(fill="transparent", colour=NA),
+            panel.grid.major = element_blank(), 
+            panel.grid.minor = element_blank(),
+            strip.background = element_rect(colour = "NA", fill = "grey96"))
+}
+```
+
+
+Pull in data
+```{r}
+# pull the tax data so we can get the species tsn for Pacific Cod
+tax <- get_ema_taxonomy() %>%
+  filter(scientific_name == "Gadus macrocephalus")
+
+# Question for Mariela - do we care about if the data come from a surface trawl or are oblique trawls acceptable? 
+# for now we'll include only surface trawls done with can trawls for now
+# we use join_event_fish because it pulls out all SPECIMEN level data (so no catch level data). This also takes some time to run
+# because if we pull all years its a lot of information. 
+
+# we can do catch weighting, where we 
+pcod <- join_event_fish(start_year = 2003, end_year = 2026, survey_region = c("NBS", "SEBS"), tsn = 164711,
+                trawl_method = "S", gear = "CAN")
+
+pcod_catch <- join_event_catch(start_year = 2003, end_year = 2025, survey_region = c("NBS", "SEBS"), tsn = 164711,
+                trawl_method = "S", gear = "CAN")
+```
+
+Quick look at the data  
+```{r}
+head(pcod)
+table(pcod$sample_year)
+
+table(pcod$length_type) # two length type SL/TL
+table(pcod$lhs_code) # multiple life histories here, instead of using the lhs code we'll use a reasonable length cutoff
+table(pcod$lhs_code, pcod$length_type) # some tl are a1+ 
+# we can only convert TL to SL for pcod under 100 mm
+
+table(pcod$length < 100, pcod$lhs_code) # there are some a0 greater than 100
+table(pcod$length < 100, pcod$length_type) # there are very few pcods that are
+
+# Question, what is a reasonable length cutoff?
+```
+
+Quick view of length dsitributions AS IS
+```{r}
+pcod %>%
+  filter(length < 200) %>%
+  ggplot() +
+  geom_density_ridges(aes(x = length, y = as.factor(sample_year), group = sample_year, fill = as.factor(sample_year))) +
+  facet_grid(cols = vars(region))
+
+```
+
+What is the annual sample counts by station in NBS & SEBS
+```{r}
+# because there are master station names that are inconsistent etc over years that haven't been fixed here we recalculate master station name
+pcod$master_station_name <- paste(plyr::round_any(pcod$eq_latitude,0.25),plyr::round_any(pcod$eq_longitude,0.25),sep="")
+
+table(is.na(pcod$master_station_name))# great all gone 
+
+# use master station name which is a rounded version of lat/lon together
+pcod %>%
+  filter(length < 200) %>%
+  filter(region == "NBS") %>%
+  group_by(region, sample_year, master_station_name) %>%
+  dplyr::summarize(num = n()) %>%
+  ggplot() +
+  geom_col(aes(x = master_station_name, y = num)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_grid(rows = vars(sample_year))
+
+pcod %>%
+  filter(length < 200) %>%
+  filter(region == "SEBS") %>%
+  group_by(region, sample_year, master_station_name) %>%
+  dplyr::summarize(num = n()) %>%
+  ggplot() +
+  geom_col(aes(x = master_station_name, y = num)) +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1)) +
+  facet_grid(rows = vars(sample_year))
+
+table(pcod$sample_year, pcod$region)
+table(pcod$sample_year, pcod$master_station_name)
+```
+
+
+create base map
+```{r}
+US <- map_data("world2Hires",region="USA")
+AK <- subset(US,subregion == "Alaska")
+USSR <- map_data("world2Hires",region="USSR")
+NBS <- rbind(AK,USSR)
+#transforms longitudes (you could also transform the longs in the data file)
+NBS$long <- NBS$long-360
+#get bathymetry data [note it's a good idea to save this as a .rds file.  This command queries a database and it can be down sometimes]
+bathline <- getNOAA.bathy(-150,-180,50,65)
+```
+
+
+```{r}
+
+ggplot() +
+    geom_polygon(data=NBS,aes(x=long,y=lat,group=group),fill="wheat3") +
+    geom_contour (data=bathline,aes(x=x,y=y,z=z),breaks=c(-50),size=c(0.3),colour="seagreen",alpha=0.2) +
+    geom_contour (data=bathline,aes(x=x,y=y,z=z),breaks=c(-200),size=c(0.3),colour="green3",alpha=0.2) +
+    annotate( geom = "text", x = -161.8, y = 57.4, label = "50m", 
+              color = "black", size = 2 )+
+    annotate( geom = "text", x = -168.1, y = 56, label = "200m", 
+              color = "black", size = 2 )+
+    scale_y_continuous(breaks=c(56,58,60, 62, 64, 66)) +
+    scale_x_continuous(breaks=c(-175, -170,-165,-160, -155)) +
+    coord_sf(crs="EPSG:3571",default_crs=sf::st_crs(4326),xlim=c(-175,-155),ylim=c(55,66)) +
+    geom_point(data = {filter(pcod, length < 200)},
+             aes(x = eq_longitude, y = eq_latitude)) +
+  facet_wrap(~sample_year)
+```
+
+Note we have some years where Pacific cod were measurred both in TL or SL. 
+The convention in recent years is to use SL. To convert historic information for individuals between 30-100 mm:
+The conversions for Pacific cod (Gadus macrocephalus) in the 30-100mm range are
+
+TL(mm) = 0.26250 + 1.0769*SL(mm)
+
+SL(mm) = 0.06258 + 0.92843*TL(mm) 
+
+Here we want to convert the TL to SL for all fish < 100 mm
+```{r}
+pcod_sl_sub <- pcod %>%
+  filter(length < 150 & length_type == "TL") %>%
+  mutate(length = 0.06258 + 0.92843*length,
+         length_type = "SL")
+
+table(pcod$length < 150, pcod$length_type)
+table(pcod_sl_sub$length_type)
+
+pcod %>%
+  filter(length < 150 & length_type == "TL") %>%
+  mutate(length_adj = 0.06258 + 0.92843*length) %>%
+  ggplot() +
+  geom_density_ridges(aes(x = length, y = as.factor(sample_year), group = sample_year), fill = "green", alpha = 0.8) +
+  geom_density_ridges(aes(x = length_adj, y = as.factor(sample_year), group = sample_year), fill = "blue", alpha = 0.8)
+
+pcod_sl <- pcod %>%
+  filter(!(length < 150 & length_type == "TL"))
+
+nrow(pcod_sl); nrow(pcod_sl_sub); nrow(pcod)
+nrow(pcod_sl) + nrow(pcod_sl_sub)
+
+pcod_sl_full <- rbind(pcod_sl_sub, pcod_sl) 
+
+pcod_sl_full %>%
+  filter(length < 150) %>%
+  ggplot() +
+  geom_density_ridges(aes(x = length, y = as.factor(sample_year), group = sample_year, fill = as.factor(sample_year))) +
+  facet_grid(cols = vars(region))
+```
+
+
+Density graph of size frequencies w/ mean length in a dashed line - grouped across years
+```{r}
+pcod_means <- pcod_sl_full %>%
+  filter(length < 150 & length_type == "SL") %>% # this takes the full pcod dataset (nrow 12453) and reduces it to 12346
+  group_by(sample_year, region) %>%
+  dplyr::summarize(mean_lng = mean(length), 
+                   median_lng = median(length),
+                   num_lng = n()) %>%
+  ungroup() %>%
+  complete(sample_year = 2003:2025, region = c("NBS", "SEBS"))
+
+pcod_sl_full %>%
+  filter(length < 150 & length_type == "SL",
+         sample_year > 2005) %>%
+  ggplot() +
+  geom_density(aes(x = length, group = as.factor(sample_year), fill = as.factor(sample_year)), alpha = 0.5) +
+  geom_vline(data = pcod_means, aes(xintercept = mean_lng, color = as.factor(sample_year)), linetype = "dashed", linewidth = 1.5) +
+  facet_wrap(~region) +
+  labs(x = "Length (mm)", y = "Density", fill = "Year") +
+  plot_theme() +
+  guides(color = "none")
+
+  
+  
+```
+
+
+Density graph of size frequencies w/ mean length in a dashed line - seperated by year
+```{r}
+
+pcod_sl_full %>%
+  filter(length < 150 & length_type == "SL",
+         sample_year > 2005) %>%
+  ggplot() +
+  geom_density_ridges(aes(x = length, y = as.factor(sample_year), group = as.factor(sample_year), fill = as.factor(sample_year))) +
+  geom_vline(data = pcod_means, aes(xintercept = mean_lng, color = as.factor(sample_year)), linetype = "dashed", linewidth = 1.5) +
+  facet_wrap(~region) +
+  labs(x = "Length (mm)", y = "Density", fill = "Year") +
+  theme_bw() +
+  guides(color = "none")
+  
+# What I dont lvoe about this graph is that it doesn't do a good job of conveying actual numbers. 
+# For example in NBS 2015 only 8 pcod were lengthed so the mean looks far right of the peak in the density
+```
+
+Quick investigation into oceanographic domain
+```{r}
+pcod_means_oceano <- pcod_sl_full %>%
+    filter(length < 150 & length_type == "SL",
+         sample_year > 2005) %>%
+  group_by(oceanographic_domain, sample_year) %>%
+  dplyr::summarize(mean_lng = mean(length), 
+                   median_lng = median(length),
+                   num_lng = n()) %>%
+  ungroup() %>%
+  complete(oceanographic_domain = c(1,2,3,4),
+           sample_year = 2006:2025)
+
+
+pcod_sl_full %>%
+  filter(length < 150 & length_type == "SL",
+         sample_year > 2005) %>%
+  ggplot() +
+  geom_density_ridges(aes(x = length, y = as.factor(oceanographic_domain), group = as.factor(oceanographic_domain), fill = as.factor(oceanographic_domain))) +
+  geom_vline(data = pcod_means_oceano, aes(xintercept = mean_lng, color = as.factor(oceanographic_domain)), linetype = "dashed", linewidth = 1.5) +
+  labs(x = "Length (mm)", y = "Density", fill = "Year") +
+  theme_bw() +
+  guides(color = "none")
+```
+
+What if we used counts rather than density
+```{r}
+pcod_sl_full %>%
+  filter(length < 150 & length_type == "SL",
+         sample_year > 2005) %>%
+  ggplot() +
+  geom_freqpoly(aes(x = length, group = as.factor(sample_year), color = as.factor(sample_year)), linewidth = 1.5) +
+  geom_vline(data = pcod_means_oceano, aes(xintercept = mean_lng, color = as.factor(sample_year)), linetype = "dashed", linewidth = 1.5) +
+  facet_wrap(~oceanographic_domain, ncol = 1) +
+  labs(x = "Length (mm)", y = "Density", color = "Year") +
+  theme_bw()
+```
+
+
+Pcod catch
+```{r}
+head(pcod_catch)
+
+pcod_catch %>%
+  mutate(cpue_num = total_catch_number/effort) %>%
+  ggplot() +
+  geom_boxplot(aes(y= cpue_num, x = as.factor(sample_year), group = as.factor(sample_year))) +
+  facet_wrap(~region, scales = "free")
+
+
 ```
 
