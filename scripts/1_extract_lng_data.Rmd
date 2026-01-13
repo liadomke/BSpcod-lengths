@@ -11,8 +11,7 @@ editor_options:
 knitr::opts_chunk$set(echo = TRUE)
 ```
 
-## R Markdown
-
+# read in libraries
 ```{r}
 # detach("package:EMAdownload", unload = T)
 # remotes::install_github("afsc-ema/EMAdownload", quiet = F, force = T, dependencies=TRUE, build_vignettes=TRUE)
@@ -47,7 +46,7 @@ plot_theme <- function() {
 ```
 
 
-Pull in data
+# Data pull from AKFIN
 ```{r}
 # pull the tax data so we can get the species tsn for Pacific Cod
 tax <- get_ema_taxonomy() %>%
@@ -78,6 +77,8 @@ table(pcod$lhs_code, pcod$length_type) # some tl are a1+
 
 table(pcod$length < 100, pcod$lhs_code) # there are some a0 greater than 100
 table(pcod$length < 100, pcod$length_type) # there are very few pcods that are
+
+table(pcod$length_type, pcod$sample_year)
 
 # Question, what is a reasonable length cutoff?
 ```
@@ -164,6 +165,7 @@ TL(mm) = 0.26250 + 1.0769*SL(mm)
 
 SL(mm) = 0.06258 + 0.92843*TL(mm) 
 
+# convert TL to SL
 Here we want to convert the TL to SL for all fish < 100 mm
 ```{r}
 pcod_sl_sub <- pcod %>%
@@ -224,7 +226,7 @@ pcod_sl_full %>%
 ```
 
 
-Density graph of size frequencies w/ mean length in a dashed line - seperated by year
+Density graph of size frequencies w/ mean length in a dashed line - separated by year
 ```{r}
 
 pcod_sl_full %>%
@@ -243,6 +245,9 @@ pcod_sl_full %>%
 ```
 
 Quick investigation into oceanographic domain
+
+# Fig oceanographic domain with pcod SL density across years
+## (MB use this)
 ```{r}
 pcod_means_oceano <- pcod_sl_full %>%
     filter(length < 150 & length_type == "SL",
@@ -250,33 +255,48 @@ pcod_means_oceano <- pcod_sl_full %>%
   group_by(oceanographic_domain, sample_year) %>%
   dplyr::summarize(mean_lng = mean(length), 
                    median_lng = median(length),
-                   num_lng = n()) %>%
+                   num_lng = n(),
+                   sd_lng = sd(length),
+                   se_lng = sd_lng/sqrt(num_lng)) %>%
   ungroup() %>%
   complete(oceanographic_domain = c(1,2,3,4),
-           sample_year = 2006:2025)
+           sample_year = 2006:2025) %>%
+  filter(oceanographic_domain %in% c(1,2)) %>%
+  mutate(oceanographic_label = ifelse(oceanographic_domain == 1, "Inner shelf",
+                                      ifelse(oceanographic_domain == 2, "Middle shelf", NA)))
 
 
 pcod_sl_full %>%
   filter(length < 150 & length_type == "SL",
-         sample_year > 2005) %>%
+         sample_year > 2005, oceanographic_domain %in% c(1,2),
+         !(sample_year %in% c(2019, 2025))) %>%
+  complete(sample_year = 2006:2025) %>% # remove this line if you only want to include years that we decided to include data from.
+  # i.e. 2006-2012, 2014-2018, 2021-2024
+  mutate(oceanographic_label = ifelse(oceanographic_domain == 1, "Inner shelf",
+                                      ifelse(oceanographic_domain == 2, "Middle shelf", NA))) %>%
   ggplot() +
-  geom_density_ridges(aes(x = length, y = as.factor(oceanographic_domain), group = as.factor(oceanographic_domain), fill = as.factor(oceanographic_domain))) +
-  geom_vline(data = pcod_means_oceano, aes(xintercept = mean_lng, color = as.factor(oceanographic_domain)), linetype = "dashed", linewidth = 1.5) +
-  labs(x = "Length (mm)", y = "Density", fill = "Year") +
-  theme_bw() +
-  guides(color = "none")
+  geom_density_ridges(alpha = 0.8,
+                      aes(x = length, y = as.factor(sample_year),
+                          fill = as.factor(oceanographic_label))) +
+  labs(x = "Length (mm)", y = "Year", fill = "Oceanographic Domain") +
+  theme_bw() 
+  
+  
 ```
 
 What if we used counts rather than density
 ```{r}
 pcod_sl_full %>%
   filter(length < 150 & length_type == "SL",
-         sample_year > 2005) %>%
+         sample_year > 2005, oceanographic_domain %in% c(1,2)) %>%
+  mutate(oceanographic_label = ifelse(oceanographic_domain == 1, "Inner shelf",
+                                      ifelse(oceanographic_domain == 2, "Middle shelf", NA))) %>%
   ggplot() +
-  geom_freqpoly(aes(x = length, group = as.factor(sample_year), color = as.factor(sample_year)), linewidth = 1.5) +
-  geom_vline(data = pcod_means_oceano, aes(xintercept = mean_lng, color = as.factor(sample_year)), linetype = "dashed", linewidth = 1.5) +
-  facet_wrap(~oceanographic_domain, ncol = 1) +
-  labs(x = "Length (mm)", y = "Density", color = "Year") +
+  geom_freqpoly(aes(x = length, color = as.factor(oceanographic_label)), linewidth = 1.5) +
+  geom_vline(data = pcod_means_oceano, aes(xintercept = mean_lng, color = as.factor(oceanographic_label)), linetype = "dashed", linewidth = 1.5) +
+  #geom_ribbon(data = pcod_means_oceano, aes(xmin = mean_lng - se_lng, xmax = mean_lng + se_lng, y = num_lng)) +
+  facet_wrap(~sample_year) +
+  labs(x = "Length (mm)", y = "Count", color = "Oceanographic Domain") +
   theme_bw()
 ```
 
