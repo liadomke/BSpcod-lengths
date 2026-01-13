@@ -49,8 +49,8 @@ plot_theme <- function() {
 # Data pull from AKFIN
 ```{r}
 # pull the tax data so we can get the species tsn for Pacific Cod
-tax <- get_ema_taxonomy() %>%
-  filter(scientific_name == "Gadus macrocephalus")
+# tax <- EMAdownload::get_ema_taxonomy() %>%
+#   filter(scientific_name == "Gadus macrocephalus")
 
 # Question for Mariela - do we care about if the data come from a surface trawl or are oblique trawls acceptable? 
 # for now we'll include only surface trawls done with can trawls for now
@@ -58,11 +58,18 @@ tax <- get_ema_taxonomy() %>%
 # because if we pull all years its a lot of information. 
 
 # we can do catch weighting, where we 
-pcod <- join_event_fish(start_year = 2003, end_year = 2026, survey_region = c("NBS", "SEBS"), tsn = 164711,
-                trawl_method = "S", gear = "CAN")
+# pcod <- join_event_fish(start_year = 2003, end_year = 2026, survey_region = c("NBS", "SEBS"), tsn = 164711,
+#                 trawl_method = "S", gear = "CAN")
 
-pcod_catch <- join_event_catch(start_year = 2003, end_year = 2025, survey_region = c("NBS", "SEBS"), tsn = 164711,
-                trawl_method = "S", gear = "CAN")
+pcod <- read.csv("data/pcod_lengths_akfin_011326.csv")
+
+#write.csv(pcod, "data/pcod_lengths_akfin_011326.csv")
+
+# pcod_catch <- join_event_catch(start_year = 2003, end_year = 2025, survey_region = c("NBS", "SEBS"), tsn = 164711,
+#                 trawl_method = "S", gear = "CAN")
+
+#write.csv(pcod_catch, "data/pcod_catch_akfin_011326.csv")
+pcod_catch <- read.csv("data/pcod_lengths_akfin_011326.csv")
 ```
 
 Quick look at the data  
