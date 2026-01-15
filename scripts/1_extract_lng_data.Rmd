@@ -69,8 +69,8 @@ pcod <- read.csv("data/pcod_lengths_akfin_011526.csv") %>%
 # pcod_catch <- join_event_catch(start_year = 2003, end_year = 2025, survey_region = c("NBS", "SEBS"), tsn = 164711,
 #                 trawl_method = "S", gear = "CAN")
 
-#write.csv(pcod_catch, "data/pcod_catch_akfin_011326.csv")
-pcod_catch <- read.csv("data/pcod_lengths_akfin_011326.csv")
+#write.csv(pcod_catch, "data/pcod_catch_akfin_011526.csv")
+pcod_catch <- read.csv("data/pcod_catch_akfin_011526.csv")
 ```
 
 Quick look at the data  
