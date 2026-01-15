@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # rm(list = c("evnt", "fsh", "event_parameters", "taxa"))
 
 
-library(EMAdownload)
+#library(EMAdownload)
 library(tidyverse)
 library(ggplot2)
 library(ggridges)
@@ -273,22 +273,60 @@ pcod_means_oceano <- pcod_sl_full %>%
                                       ifelse(oceanographic_domain == 2, "Middle shelf", NA)))
 
 
+amss_Fig1 <- 
 pcod_sl_full %>%
   filter(length < 150 & length_type == "SL",
          sample_year > 2005, oceanographic_domain %in% c(1,2),
-         !(sample_year %in% c(2019, 2025))) %>%
-  complete(sample_year = 2006:2025) %>% # remove this line if you only want to include years that we decided to include data from.
+         sample_year < 2025,
+         !(sample_year %in% c(2019))) %>%
+  complete(sample_year = 2006:2024) %>% # remove this line if you only want to include years that we decided to include data from.
   # i.e. 2006-2012, 2014-2018, 2021-2024
   mutate(oceanographic_label = ifelse(oceanographic_domain == 1, "Inner shelf",
                                       ifelse(oceanographic_domain == 2, "Middle shelf", NA))) %>%
   ggplot() +
-  geom_density_ridges(alpha = 0.8,
+  geom_density_ridges(alpha = 0.6,
                       aes(x = length, y = as.factor(sample_year),
                           fill = as.factor(oceanographic_label))) +
+  scale_fill_manual(values = c("darkblue","orange")) +
   labs(x = "Length (mm)", y = "Year", fill = "Oceanographic Domain") +
-  theme_bw() 
+  theme_bw() +
+  theme(axis.line = element_line(color = "black"),
+        plot.background = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.grid.major = element_blank(),
+        strip.background = element_blank(),
+        panel.border = element_rect(color = "black", fill = NA),
+        axis.text = element_text(color = "black"),
+        legend.title = element_blank(),
+        legend.position = "none", # uncomment to remove legend for saving figure
+        text = element_text(size = 32)) # change to 32 to save figure
+
+# ggsave("amssFig1_LengthDensityPlots_axisTextFix_011526.png",plot = amss_Fig1,
+#       height = 14,
+#       width = 10,
+#       dpi = 300,
+#       units = "in",
+#       path = "figures/")
+
   
-  
+```
+
+
+Correct Length for day of year and latitude...how does this affect distributions? Is there a better way to apply this correction?
+
+```{r, echo = FALSE}
+
+# # Define YearDay for length data
+# pcod_sl_full$YearDay <-
+#   lubridate::yday(pcod_sl_full$sample_date) # Need sample date data before we can run this...
+# 
+# mod <- glm(log(Length) ~ Latitude + YearDay, data = pcod_sl_full)
+# pcod_sl_full$glmLengthLatYday_resid <- resid(mod)
+# fitstatsLengthLatYday <- summary(mod)
+# fitstatsLengthLatYday
+
+
+
 ```
 
 What if we used counts rather than density
