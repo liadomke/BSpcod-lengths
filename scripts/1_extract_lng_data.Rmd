@@ -61,9 +61,10 @@ plot_theme <- function() {
 # pcod <- join_event_fish(start_year = 2003, end_year = 2026, survey_region = c("NBS", "SEBS"), tsn = 164711,
 #                 trawl_method = "S", gear = "CAN")
 
-pcod <- read.csv("data/pcod_lengths_akfin_011526.csv")
+pcod <- read.csv("data/pcod_lengths_akfin_011526.csv") %>%
+  dplyr::select(-c(X, X.1))
 
-# write.csv(pcod, "data/pcod_lengths_akfin_011526.csv")
+#write.csv(pcod, "data/pcod_lengths_akfin_011526.csv", row.names = F)
 
 # pcod_catch <- join_event_catch(start_year = 2003, end_year = 2025, survey_region = c("NBS", "SEBS"), tsn = 164711,
 #                 trawl_method = "S", gear = "CAN")
