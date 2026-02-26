@@ -18,7 +18,7 @@ knitr::opts_chunk$set(echo = TRUE)
 # rm(list = c("evnt", "fsh", "event_parameters", "taxa"))
 
 
-#library(EMAdownload)
+library(EMAdownload)
 library(tidyverse)
 library(ggplot2)
 library(ggridges)
@@ -58,19 +58,21 @@ plot_theme <- function() {
 # because if we pull all years its a lot of information. 
 
 # we can do catch weighting, where we 
-# pcod <- join_event_fish(start_year = 2003, end_year = 2026, survey_region = c("NBS", "SEBS"), tsn = 164711,
-#                 trawl_method = "S", gear = "CAN")
+pcod <- join_event_fish(start_year = 2003, end_year = 2026, survey_region = c("NBS", "SEBS"), tsn = 164711,
+                trawl_method = "S", gear = "CAN")
 
 pcod <- read.csv("data/pcod_lengths_akfin_011526.csv") %>%
   dplyr::select(-c(X, X.1))
 
 #write.csv(pcod, "data/pcod_lengths_akfin_011526.csv", row.names = F)
 
-# pcod_catch <- join_event_catch(start_year = 2003, end_year = 2025, survey_region = c("NBS", "SEBS"), tsn = 164711,
-#                 trawl_method = "S", gear = "CAN")
+pcod_catch <- join_event_catch(start_year = 2003, end_year = 2025, survey_region = c("NBS", "SEBS"), tsn = 164711,
+                trawl_method = "S", gear = "CAN", catch0 = TRUE)
 
 #write.csv(pcod_catch, "data/pcod_catch_akfin_011526.csv")
-pcod_catch <- read.csv("data/pcod_catch_akfin_011526.csv")
+#pcod_catch <- read.csv("data/pcod_catch_akfin_011526.csv")
+
+table(pcod_catch$lhs_code)
 ```
 
 Quick look at the data  
@@ -99,6 +101,26 @@ pcod %>%
   geom_density_ridges(aes(x = length, y = as.factor(sample_year), group = sample_year, fill = as.factor(sample_year))) +
   facet_grid(cols = vars(region))
 
+pcod %>%
+  ggplot() +
+  geom_histogram(aes(x = length, fill = lhs_code))
+
+test <- filter(pcod, length < 150 & lhs_code %in% c("A0", "A1+")) %>%
+  filter(sample_year %in% c(2006, 2007, 2009, 2011))
+
+write.csv(test, "confusing_lhs_pcod_lng.csv")
+
+ggplot(data = test) +
+  geom_histogram(aes(x = length, fill = lhs_code)) +
+  facet_wrap(~sample_year)
+
+unique(test$sample_year)
+
+conc.size <-pcod_catch %>%
+  filter(sample_year %in% c(2006, 2007, 2009, 2011),
+         total_catch_number > 0)
+
+table(conc.size$lhs_code)
 ```
 
 What is the annual sample counts by station in NBS & SEBS
