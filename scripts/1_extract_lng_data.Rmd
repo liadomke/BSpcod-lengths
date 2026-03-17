@@ -322,7 +322,9 @@ pcod_sl_full %>%
         axis.text = element_text(color = "black"),
         legend.title = element_blank(),
         legend.position = "none", # uncomment to remove legend for saving figure
-        text = element_text(size = 32)) # change to 32 to save figure
+        text = element_text(size = 32)) # change to 32 or 34 to save figure
+
+amss_Fig1
 
 # ggsave("amssFig1_LengthDensityPlots_axisTextFix_011526.png",plot = amss_Fig1,
 #       height = 14,
@@ -340,15 +342,15 @@ Correct Length for day of year and latitude...how does this affect distributions
 ```{r, echo = FALSE}
 
 # # Define YearDay for length data
-# pcod_sl_full$YearDay <-
-#   lubridate::yday(pcod_sl_full$sample_date) # Need sample date data before we can run this...
-# 
-# mod <- glm(log(Length) ~ Latitude + YearDay, data = pcod_sl_full)
-# pcod_sl_full$glmLengthLatYday_resid <- resid(mod)
-# fitstatsLengthLatYday <- summary(mod)
-# fitstatsLengthLatYday
+pcod_sl_full$YearDay <- 
+  lubridate::yday(pcod_sl_full$haul_date) # Need sample date data before we can run this...
 
-
+mod <- glm(log(length) ~ eq_latitude + YearDay, data = pcod_sl_full)
+pcod_sl_full$glmLengthLatYday_resid <- resid(mod)
+#pcod_sl_full$glmLengthLatYday_predict 
+test_predict <- predict(mod, pcod_sl_full$length, type = "response")
+fitstatsLengthLatYday <- summary(mod)
+fitstatsLengthLatYday
 
 ```
 
@@ -379,6 +381,11 @@ pcod_catch %>%
   geom_boxplot(aes(y= cpue_num, x = as.factor(sample_year), group = as.factor(sample_year))) +
   facet_wrap(~region, scales = "free")
 
+pcod_catch %>%
+  mutate(cpue_num = total_catch_number/effort) %>%
+  ggplot() +
+  geom_point(aes(y= cpue_num, x = as.factor(sample_year), group = as.factor(sample_year))) +
+  facet_wrap(~region, scales = "free")
 
 ```
 
