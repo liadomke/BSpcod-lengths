@@ -27,7 +27,7 @@ library(maps)
 library(mapdata)
 library(mapproj)
 # mapping
-# library(marmap)
+library(marmap)
 # library(PBSmapping)
 ```
 
@@ -108,7 +108,7 @@ pcod %>%
 test <- filter(pcod, length < 150 & lhs_code %in% c("A0", "A1+")) %>%
   filter(sample_year %in% c(2006, 2007, 2009, 2011))
 
-write.csv(test, "confusing_lhs_pcod_lng.csv")
+#write.csv(test, "confusing_lhs_pcod_lng.csv")
 
 ggplot(data = test) +
   geom_histogram(aes(x = length, fill = lhs_code)) +
@@ -387,5 +387,84 @@ pcod_catch %>%
   geom_point(aes(y= cpue_num, x = as.factor(sample_year), group = as.factor(sample_year))) +
   facet_wrap(~region, scales = "free")
 
+```
+
+experimental modelling 
+```{r}
+names(pcod_catch)
+
+pcod_cpue <- pcod_catch %>%
+  group_by(sample_year, station_id, lhs_code, gear) %>%
+  mutate(cpue = total_catch_number/effort)
+
+lm<- lm(cpue ~ sample_year, data = pcod_cpue)
+
+library(DHARMa)
+plot(lm)
+
+residuals <- simulateResiduals(lm)
+plotResiduals(residuals)
+plotQQunif(residuals)
+```
+
+Okay here we will be preparing the data for use 
+We want to take the catch and lengthed data and 
+1. look up how many length samples are at each sampling event (station) and what proportion of the catch those represent
+
+#1. proportion sampled/unsampled
+
+```{r}
+nrow(pcod)
+head(pcod) # uses surface catch only in nbs and sebs 2003:today
+nrow(pcod_catch) # same here
+```
+
+```{r}
+unique(pcod_catch$tow_type); unique(pcod_catch$gear)
+
+# look for catch 0 positive weight discrepancy & vice versa
+discrep <- filter(pcod_catch, total_catch_number == 0 & total_catch_weight != 0)
+discrep2 <- filter(pcod_catch, total_catch_number !=0 & total_catch_weight == 0)
+
+# there's no length data for the two stations that were sampled in 2003 (n = 9 and 5; 20030101080 & 20030101007
+# checking the paper records there were only catch numbers recorded for those stations and no lengths
+# for 20030101080 9 individuals were caught and processed to say they were between 11.2-12 cm (112 - 120 mm)
+# for 20030101007 5 were caught and all weren't processed
+test<- subset(pcod, station_id %in% discrep2$station_id)
+
+# no lengths taken where the catch was weighed and no catch number stimated, which is what i'd expect. 
+test2 <- subset(pcod, station_id %in% discrep$station_id)
+
+# so from these I won't be able to use these stations to estimate information
+```
+
+
+
+```{r}
+## we have two problems that need to be dealt with here
+#1. that there are tl measured pcods that should be SL
+table(pcod$length_type) # we know we have TL that should be SL
+pcod.tl <- filter(pcod, length_type == "TL")
+table(pcod.tl$sample_year, pcod.tl$lhs_code)
+# how many pcod greater than the 100 mm equation cut off that we think need to be changed
+filter(pcod, length_type == "TL" & length > 100 & length < 140) %>%
+  nrow(.) # approx 924 instances that will need to be adjusted and perhaps won't be correct, but we don't have a better 
+# equation to base it off of. However actual number is likely different because the 140 mm cut off is based on SL
+total_lng_cutoff <- 0.26250 + 1.0769*140 # this is the total length cutoff, 151.028
+
+pcod_corrected <- pcod %>%
+  mutate(corrected_lng = ifelse(length_type == "TL" & length < total_lng_cutoff,
+                         0.06258 + 0.92843*length,
+                         ifelse(length_type == "TL" & length > total_lng_cutoff, NA,
+                                ifelse(length_type == "SL" & length < 140, length, NA)))) 
+
+pcod_corrected
+
+# 2. there are pcod classified as A1+ that are within the 140 mm range
+# quick test to see if there are any pcod less than 140 that migth need to be 
+# reclassified
+test_a0_pcod_lng <- filter(pcod, length < 140 & lhs_code == "A1+")
+table(test_a0_pcod_lng$lhs_code) # 
+filter(pcod, length > 140 & lhs_code == "A0") # at least theres no big pcod classified as A0
 ```
 

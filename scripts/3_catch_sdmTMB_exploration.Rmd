@@ -1,0 +1,175 @@
+---
+title: "3_catch_sdmTMB_exploration"
+output: html_document
+date: "2026-03-30"
+editor_options: 
+  chunk_output_type: console
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+#libraries
+```{r}
+library(EMAdownload)
+library(tidyverse)
+library(ggplot2)
+library(sdmTMB)
+library(patchwork)
+```
+
+# data
+```{r}
+this.year <- format(Sys.Date(), "%Y") %>% as.numeric()
+
+pcod_catch <- join_event_catch(start_year = 2003, end_year = this.year, survey_region = c("NBS", "SEBS"), tsn = 164711,
+                trawl_method = "S", gear = "CAN", catch0 = TRUE) %>%
+  filter()
+# note akfin upload date, if in Jan hasn't been updated to include the correct pcod cut off point for 140 mm
+```
+
+go through some of the basic steps for sdmTMB 
+
+- add_utm_columns
+- make mesh, make_mes()
+- fit model 
+    - modelling catch data with effort data
+    - for now i think we're more interestd in catch data rather than weightcpue
+    - an easy start for distribution would be to use the tweedie model (alt. could use a poisson with a effort offset)
+    
+```{r}
+# check to make sure the format makes sense
+head(pcod_catch)
+unique(pcod_catch$common_name)
+range(pcod_catch$total_catch_number)
+
+table(pcod_catch$total_catch_number > 0) # lots of zeros 
+table(pcod_catch$sample_year, pcod_catch$total_catch_number >0)
+
+hist(pcod_catch$total_catch_number) # kinda looks zero inflated :(
+# for now lets move forward with it the way it is and see how model fits look
+
+table(pcod_catch$lhs_code, pcod_catch$total_catch_number > 0)
+
+pcod_catch_a0 <- filter(pcod_catch, lhs_code == "A0")
+```
+
+## add utms & mesh
+```{r}
+catch.32603 <- add_utm_columns(pcod_catch_a0,
+                ll_names = c("eq_longitude", "eq_latitude")) %>%
+  dplyr::select(c(sample_year, station_id, master_station_name:region, eq_time:eq_longitude, effort, effort_units, 
+                  species_tsn:total_catch_weight, X, Y)) %>%
+  mutate(cpue = total_catch_number / effort)
+# this uses CRS 32603
+
+wgs <- ggplot() +
+  geom_point(aes(eq_longitude, eq_latitude), data = catch.32603)
+
+utm <- ggplot() +
+  geom_point(aes(X, Y), data = catch.32603)
+
+wgs + utm
+
+# this is somewhat of a high number of knots (I think) but lets try it out for now
+mesh <- make_mesh(catch.32603, c("X", "Y"), n_knots = 80)
+plot(mesh)
+# might want to consider some kind of barrier here to make sure that we're not trying to make a correlation matrix thingy with places with no data that don't make sense
+```
+
+## fit model
+
+this is a first pass to see if this converges but these are why i think i'm making these decisions
+```{r}
+# this model estaimtes: independent year effects (because of sample_year in model formula),
+# a
+fit1 <- sdmTMB(
+  data = catch.32603,
+  # we're curious about the total_catch_number (abundance) that may vary by time (so estimating a diff parameter for each year) 
+  total_catch_number ~ 0 + as.factor(sample_year),
+  # this is the mesh we created above that (we think) is a finer scale mesh, can be coarser if conversion issues arise
+  mesh = mesh,
+  # since we have spatio temporal fields on (w/ iid) we need to indicate what our time column is
+  time = "sample_year",
+  # tweedie family is a good starting point generally used with continuous and/or zero inflated biomass data the
+  # catch data is perhaps not the most appropriate but we'll start here, maybe poisson with a catch offset would be better?
+  family = tweedie(link = "log"), 
+  # spatiotmeporal field is iid meaning each year is independently estimated 
+  # this is another spot we could loosen up on flexibility if it doesn't converge (i.e., ar1 or rw)
+  spatiotemporal = "IID"
+)
+
+fit1
+
+# things of interest here, 
+#' dispersion - how much variability after account for main effects and spatial/spatiotemporal 
+#' matern range - indicates if smooth or patchy
+#' spatiial SD if high means theres strong peaks / valleys in spatial fields, if 0 no spatial variability
+#' 
+tidy(fit1, "ran_pars")
+#' range smooth or patchy (but which is which)
+```
+
+## model checks
+```{r}
+# looking for approximately normal along the line
+catch.32603$resid <- residuals(fit1, type = "mle-mvn")
+qqnorm(catch.32603$resid)
+abline(0,1)
+
+hist(catch.32603$resid)
+
+# spatial residuals
+# here we're revuing the data to make sure we're not seeing patterns of clustering of
+# positive and negative residuals together
+ggplot() +
+  geom_point(data = catch.32603, aes(X, Y, color = resid)) +
+  scale_color_gradient2() +
+  facet_wrap(~sample_year)
+# kinda looks okay?
+
+# passes the standard sanity checks
+sanity(fit1)
+```
+
+## predict obs
+```{r}
+preds <- predict(fit1)
+
+#' est: fixed + spatial + spatiotemporal (use this for maps and indices)
+#' est_non_rf - fixed effects only, use this to understand the covariate-driven signal (in our case here this would
+#' be the temporal effects)
+#' omega_s - spatial random effects use this to see persistent spatial deviations 
+#' epsilon_st - spatiotemporal random effects, will tell you/show year-specific anomalies
+
+
+# i think this is the spatiotemporal random effects fields
+preds %>% 
+  ggplot(aes(x=X, y=Y, color=epsilon_st)) + 
+  #theme_linedraw() +
+  scale_color_viridis_c() +
+  geom_point() +
+  facet_wrap(~sample_year) +
+  ggtitle("Spatiotemporal RE (link space)",subtitle="Spatiotemporal Model")
+
+# to includes overall estimate that includes the main effects
+
+preds %>%
+  ggplot(aes(x =X, y = Y, color = est)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  facet_wrap(~sample_year)
+  
+```
+
+
+## get indicies
+jk we're going to wait on this cause we want to make a prediction grid first
+```{r}
+#index_preds <- predict(fit1, return_tmb_object = TRUE)
+?get_cog
+#get_index(index_preds)
+```
+
+
