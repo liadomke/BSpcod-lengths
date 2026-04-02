@@ -238,6 +238,10 @@ ggplot(index) +
 cog <- get_cog(index_preds)
 head(cog)
 
+ggplot(cog) +
+  geom_point(aes(sample_year, est)) +
+  geom_errorbar(aes(sample_year, ymin = lwr, ymax = upr)) +
+  facet_wrap(~coord, scales = "free_y")
 ```
 
 
