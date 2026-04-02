@@ -97,7 +97,12 @@ fit1 <- sdmTMB(
   family = tweedie(link = "log"), 
   # spatiotmeporal field is iid meaning each year is independently estimated 
   # this is another spot we could loosen up on flexibility if it doesn't converge (i.e., ar1 or rw)
-  spatiotemporal = "IID"
+  spatiotemporal = "IID",
+  # anisotropy v isotrophy this is the decorrelation assumptions with Matern distance. 
+  # basically it assume that the decorrelation dist the same E-W and N-S however in the BS 
+  # we would expect that there would be greater correlation along shelf (NW/SE) than across shelf E-W
+  # in general keep unless its unestimable 
+  anisotropy = TRUE
 )
 
 fit1
@@ -163,6 +168,58 @@ preds %>%
   
 ```
 
+## prediction grids
+```{r}
+library(sf)
+library(sfheaders)
+library(concaveman)
+# steps : 
+# create sf object, converts to metric
+catch.sf <- catch.32603 %>%
+  dplyr::select(c(X, Y, eq_latitude, eq_longitude)) %>%
+  mutate(X = X * 1000, Y = Y * 1000) %>% # convert to meters for crs 32606 (but we're using 32603 i think thats ok)
+  st_as_sf(coords = c("X", "Y"), crs = 32603)
+
+# check to make sure it makes sense
+head(catch.sf$geometry)
+# create convex hull 
+convex_hull <- concaveman(catch.sf, concavity = 3)
+plot(convex_hull)
+
+# add buffer
+convex_buff <- st_buffer(convex_hull, dist = 15e3) # dist in meters (i think) so this is 15 km buffer
+plot(convex_buff)
+
+# make grid, created a cell size of 10,000 x 10,000 m (10 x 10 km) with poitns in center
+# need to check units on this... 
+grid <- st_make_grid(convex_buff, cellsize = 10e3, what = "centers") %>%
+  st_intersection(convex_buff)
+plot(grid)
+
+# change back to df, this wasn't straightforward for me...
+bs.grid <- do.call(rbind, st_geometry(grid)) %>%
+  as.tibble() %>% setNames(c("X", "Y")) %>%
+  # convert df m back to km
+  mutate(X = X/1e3, Y = Y/1e3)
+
+plot(bs.grid)
+
+# replicate the df grid for each year (or other variables we include either spatio temporal or temporal) depth, temp etc
+bs.grid.yrs <- replicate_df(bs.grid, "sample_year", unique(catch.32603$sample_year)) # does this across 2003:2025, but no 2020
+
+```
+
+## predict across grid
+```{r}
+preds <- predict(fit1, newdata = bs.grid.yrs, return_tmb_object = F)
+
+preds %>%
+  ggplot(aes(X, Y, fill =est)) +
+  scale_fill_viridis_c() +
+  geom_raster() +
+  facet_wrap(~sample_year)
+```
+
 
 ## get indicies
 jk we're going to wait on this cause we want to make a prediction grid first
@@ -170,6 +227,17 @@ jk we're going to wait on this cause we want to make a prediction grid first
 #index_preds <- predict(fit1, return_tmb_object = TRUE)
 ?get_cog
 #get_index(index_preds)
+
+index_preds <- predict(fit1, newdata = bs.grid.yrs, return_tmb_object = TRUE)
+index <- get_index(index_preds)
+
+ggplot(index) +
+  geom_point(aes(sample_year, est)) +
+  geom_errorbar(aes(sample_year, ymin = lwr, ymax = upr))
+
+cog <- get_cog(index_preds)
+head(cog)
+
 ```
 
 
