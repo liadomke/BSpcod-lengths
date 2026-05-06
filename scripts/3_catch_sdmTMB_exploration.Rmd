@@ -24,9 +24,8 @@ library(patchwork)
 this.year <- format(Sys.Date(), "%Y") %>% as.numeric()
 
 pcod_catch <- join_event_catch(start_year = 2003, end_year = this.year, survey_region = c("NBS", "SEBS"), tsn = 164711,
-                trawl_method = "S", gear = "CAN", catch0 = TRUE) %>%
-  filter()
-# note akfin upload date, if in Jan hasn't been updated to include the correct pcod cut off point for 140 mm
+                trawl_method = "S", gear = "CAN", catch0 = TRUE) 
+# note akfin upload date, if in the upload date says some time in Jan 2026 then the pcod data hasn't been updated to include the correct pcod cut off point for 140 mm
 ```
 
 go through some of the basic steps for sdmTMB 
