@@ -348,9 +348,9 @@ pcod_sl_full$YearDay <-
 mod <- glm(log(length) ~ eq_latitude + YearDay, data = pcod_sl_full)
 pcod_sl_full$glmLengthLatYday_resid <- resid(mod)
 #pcod_sl_full$glmLengthLatYday_predict 
-test_predict <- predict(mod, pcod_sl_full$length, type = "response")
-fitstatsLengthLatYday <- summary(mod)
-fitstatsLengthLatYday
+# test_predict <- predict(mod, pcod_sl_full$length, type = "response")
+# fitstatsLengthLatYday <- summary(mod)
+# fitstatsLengthLatYday
 
 ```
 
@@ -408,10 +408,17 @@ plotQQunif(residuals)
 ```
 
 Okay here we will be preparing the data for use 
-We want to take the catch and lengthed data and 
-1. look up how many length samples are at each sampling event (station) and what proportion of the catch those represent
+We want to take the catch and lengthed data and correct the lengths
 
-#1. proportion sampled/unsampled
+We were going to set up these length data to catch weight the lengths by the number of indivduals
+that were sampled, but i've decided based on trying to do that with the age-0 pollock data
+that it creates too large of a dataframe that perhaps doesn't make sense. 
+its trying to aggregate both the abundance information and length information into a single analysis when perhaps we have separate question for each one of those... 
+
+
+Instead let us correct the length information for Pcod
+
+# Correct remaining Pcod
 
 ```{r}
 nrow(pcod)
@@ -464,7 +471,12 @@ pcod_corrected
 # quick test to see if there are any pcod less than 140 that migth need to be 
 # reclassified
 test_a0_pcod_lng <- filter(pcod, length < 140 & lhs_code == "A1+")
-table(test_a0_pcod_lng$lhs_code) # 
+table(test_a0_pcod_lng$lhs_code) # all pcod that were less than 140 w/ lhs A1+ were fixed
 filter(pcod, length > 140 & lhs_code == "A0") # at least theres no big pcod classified as A0
+```
+
+# Output data
+```{r}
+#write.csv(pcod_corrected, "data/pcod_length_corrected_050426.csv", row.names = F)
 ```
 
