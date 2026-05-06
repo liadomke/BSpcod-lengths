@@ -1,0 +1,284 @@
+---
+title: "4_lng_sdmTMB_expoloration"
+output: html_document
+date: "2026-05-04"
+editor_options: 
+  chunk_output_type: console
+---
+
+# library
+```{r}
+library(tidyverse)
+library(EMAdownload)
+library(sdmTMB)
+library(lubridate)
+library(sf)
+library(concaveman)
+library(maps)
+library(marmap)
+library(visreg)
+```
+
+
+# data
+```{r}
+# pre curated length data (see 1_extract_lng_data.Rmd)
+pcod_lngs <- read.csv("data/pcod_length_corrected_050426.csv") %>% filter(length < 154) %>% dplyr::select(-X) %>%
+  mutate(doy = yday(haul_date), # convert to doy and then scale to mean 0 sd 1
+         scale_doy = scale(doy, center = TRUE, scale = TRUE))
+this.year <- format(Sys.Date(), "%Y") %>% as.numeric()
+pcod_catch <- join_event_catch(start_year = 2003, end_year = this.year, survey_region = c("NBS", "SEBS"), tsn = 164711,
+                trawl_method = "S", gear = "CAN", catch0 = TRUE, lhs = "A0") 
+
+```
+
+basic checks
+- what is the proportion of sampled pcod to the total unsampled (for lengths) catch numbers?
+```{r}
+# all NAs removed 
+table(is.na(pcod_lngs$corrected_lng)) # okay lengths look good
+#na.lngs <- filter(pcod_lngs, is.na(corrected_lng))
+
+pcod_lng_size <- pcod_lngs %>%
+  group_by(station_id) %>%
+  dplyr::summarise(num_lng = n()) # 451 stations sampled
+
+catch_prop <- left_join(pcod_catch, pcod_lng_size, by = "station_id") %>%
+  group_by(station_id) %>%
+  mutate(proportion_sampled = num_lng / total_catch_number)
+
+range(catch_prop$proportion_sampled, na.rm = T)
+
+hist(catch_prop$proportion_sampled)
+
+# none with a proportion greater than 1 which is good
+filter(catch_prop, proportion_sampled > 1)
+
+
+# clean up the pcod length dataframe
+lngs <- dplyr::select(pcod_lngs, c(sample_year, eq_latitude, eq_longitude, scientific_name,
+                           lhs_code, species_tsn, specimen_notes, corrected_lng, doy, scale_doy))
+```
+If we wanted to feel decent about our proportion sampled, we could resample/bootstrap assignment of 
+lengths to the unmeasured catch and look at the variability in the mean estimates. We did this with the pollock
+data and found that variability went down if approx 10% or mroe of the catch was sampled
+
+basic steps for sdmtmb
+- add_utm_columns
+- make mesh, make_mesh()
+- fit model 
+    - modelling length data (likely gaussian)
+- create prediction grid
+- predict & map predictions (both average spatial field but also annual estimates)
+
+
+other steps
+# create base/bathy map
+```{r}
+# make sure the base map / bathy is created with the advanced sf library 
+sf_use_s2(TRUE)
+
+# need to use world not world2hires cause that one is hella old and doesn't plot correctly
+bs_map <- maps::map("world", regions = c("USA:Alaska", "Russia"), 
+                    fill = TRUE, plot = FALSE, wrap = c(0, 360)) %>%
+  st_as_sf(crs = 4326) 
+
+# Use bounding box, have to add 360 to the bbox coords
+# xmin = 185 (-175), xmax = 202 (-155)
+bbox_360 <- st_bbox(c(xmin = 180, xmax = 210, ymin = 50, ymax = 68), 
+                    crs = st_crs(bs_map))
+
+# crop 
+# Using st_make_valid helps w/ messy polys
+bs_base <- bs_map %>% 
+  st_make_valid() %>% 
+  st_intersection(st_as_sfc(bbox_360)) %>%
+  st_shift_longitude()
+
+bs_croppedUTM <- bs_base %>%
+  st_transform(crs = 32602) # Move to UTM Zone 2N
+
+#read in bathymetry file.  
+bathline <- getNOAA.bathy(-180,-155,53,68)
+
+bathline.xyz <- as.xyz(bathline)
+```
+
+plot raw data
+```{r}
+pcod_lngs_sf <- pcod_lngs %>%
+  st_as_sf(coords = c("eq_longitude", "eq_latitude"), crs = 4326) %>%
+  st_shift_longitude()
+
+ggplot() +
+  geom_sf(data = pcod_lngs_sf, aes()) +
+  geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+               breaks = c(-50, -70, -150), color = "black") +
+  # use the 360 coords for longitude (so -150 + 360)
+  coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F)
+```
+
+
+# sdmtmb length
+## add_utm_columns
+```{r}
+pcod_lngs_utm <- add_utm_columns(lngs, 
+                  ll_names = c("eq_longitude", "eq_latitude"),
+                  utm_names = c("X", "Y"),
+                  ll_crs = 4326,
+                  units = "km") # units should be in km, but sf generally requires m (fyi)
+# uses 32603 UTM Zone 3N
+plot(pcod_lngs_utm$X, pcod_lngs_utm$Y)
+```
+
+## make mesh
+```{r}
+mesh <- make_mesh(pcod_lngs_utm,
+                  xy_cols = c("X", "Y"),
+                  n_knots = 60)
+```
+
+## fit model 
+```{r}
+fit <- sdmTMB(data = pcod_lngs_utm,
+              # removes the intercept (0)
+              log(corrected_lng) ~ 0 + as.factor(sample_year) + s(scale_doy),
+              mesh = mesh,
+              # needs to be here if you're estimating a spatiotemporal field
+              time = "sample_year",
+              # could also try lognormal(link = "log")
+              family = gaussian(link = "identity"),
+              spatial = "on",
+              # each year independently estimated
+              spatiotemporal = "IID",
+              # we want this but if it doesn't fit we can try removing
+              anisotropy = TRUE
+              )
+```
+
+model checks
+```{r}
+sanity(fit)
+tidy(fit, "ran_pars")
+summary(fit)
+
+
+## check residuals
+pcod_lngs_utm$resid <- residuals(fit, type = "mle-mvn")
+qqnorm(pcod_lngs_utm$resid)
+abline(0,1)
+# making sure that we're not seeing patterns in the residuals
+ggplot() +
+  geom_point(data = pcod_lngs_utm, aes(X, Y, color = resid)) +
+  scale_color_gradient2() +
+  facet_wrap(~sample_year)
+# looks decent maybe some patterning in 2005?
+```
+
+
+## create prediction grid
+```{r}
+# create sf object
+pcod.sf <- pcod_lngs_utm %>%
+  ungroup() %>%
+  dplyr::select(c(X, Y, eq_longitude, eq_latitude)) %>%
+  mutate(X = X*1000, Y = Y*1000) %>% # needs to be converted to meters for sf to work
+  st_as_sf(coords = c("X", "Y"), crs = 32603)
+
+convex <- concaveman(pcod.sf, concavity = 3)
+#plot(convex)
+convex.buff <- st_buffer(convex, dist = 15e3)
+#plot(convex.buff)
+
+## make grid
+# make grid, created a cell size of 10,000 x 10,000 m (10 x 10 km) with poitns in center
+grid <- st_make_grid(convex.buff, cellsize = 10e3, what = "centers") %>%
+  st_intersection(convex.buff)
+
+## change back to df
+bs.grid <- do.call(rbind, st_geometry(grid)) %>%
+  as_tibble() %>% setNames(c("X", "Y")) %>%
+  # convert df m back to km
+  mutate(X = X/1000, Y = Y/1000)
+plot(bs.grid)
+
+## replicate df across years and include any other variables we inlcude in our fit of the model
+## i.e., depth tmeperature etc
+bs.grid.year <- replicate_df(bs.grid, "sample_year", unique(pcod_lngs$sample_year))
+bs.grid.doy <- replicate_df(bs.grid.year, "scale_doy", 0) # between 235 and 236 is ~0
+
+
+# maps some of the sites
+# ggplot() +
+#   geom_sf(data = pcod.sf.shift, aes()) +
+#   geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+#   geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+#                breaks = c(-50, -70, -150), color = "black") +
+#   #use the 360 coords for longitude (so -150 + 360)
+#   coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F)
+```
+
+## predict & map predictions 
+(both average spatial field but also annual estimates)
+
+```{r}
+# predictiosn would be good for fitting the average spatial field 
+predictions <- predict(fit, newdata = bs.grid.doy) %>%
+  mutate(Y_m = Y * 1000,
+         X_m = X * 1000) # sf requires meters
+
+predictions.sf <- st_as_sf(predictions, coords = c("X_m", "Y_m"), crs = 32603) %>%
+  st_transform(crs = 4326) %>%
+  st_shift_longitude()
+
+ggplot(predictions, aes(X_m, Y_m, fill = exp(est))) +
+  scale_fill_viridis_c() + geom_tile() +
+  facet_wrap(~as.factor(sample_year)) +
+  labs(x = "Longitude", y = "Latitude")
+
+# needs to be exp(est) because you logtransformed your corrected length
+lng.by.year <- ggplot() +
+  geom_sf(data = predictions.sf, aes(fill = exp(est), color = exp(est)), pch = 22) +
+  scale_color_viridis_c() + scale_fill_viridis_c() +
+  geom_sf(data = pcod_lngs_sf, aes()) +
+  geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+               breaks = c(-50, -70, -150), color = "black") +
+  # use the 360 coords for longitude (so -150 + 360)
+  coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
+  facet_wrap(~as.factor(sample_year)) +
+  labs(x = "Longitude", y = "Latitude", color = "Predicted length (mm)",
+       fill = "Predicted length (mm)") +
+  theme(text = element_text(size = 16))
+
+# average spatial field
+lng.avg.spatial <- ggplot() +
+  geom_sf(data = predictions.sf, aes(fill = exp(omega_s), color = exp(omega_s)), pch = 22) +
+  scale_color_viridis_c() + scale_fill_viridis_c() +
+  geom_sf(data = pcod_lngs_sf, aes()) +
+  geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+               breaks = c(-50, -70, -150), color = "black") +
+  # use the 360 coords for longitude (so -150 + 360)
+  coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
+  labs(x = "Longitude", y = "Latitude", color = "Predicted length (mm)",
+       fill = "Predicted length (mm)") +
+  theme(text = element_text(size = 16))
+
+
+# ggsave(filename = "figures/predicted_lng_year_050626.png", plot = lng.by.year,
+#        height = 14, width = 14)
+# 
+# ggsave(filename = "figures/pred_lng_avg_spatial_052626.png", plot = lng.avg.spatial,
+#        height = 14, width = 14)
+```
+
+
+## investigate avg length by year
+```{r}
+predictions_tmb <- predict(fit, newdata = bs.grid.doy, return_tmb_object = T)
+
+visreg(fit, plot = F)
+```
+
