@@ -25,7 +25,8 @@ library(visreg)
 # pre curated length data (see 1_extract_lng_data.Rmd)
 pcod_lngs <- read.csv("data/pcod_length_corrected_050426.csv") %>% filter(length < 154) %>% dplyr::select(-X) %>%
   mutate(doy = yday(haul_date), # convert to doy and then scale to mean 0 sd 1
-         scale_doy = scale(doy, center = TRUE, scale = TRUE))
+         scale_doy = #scale(doy, center = TRUE, scale = TRUE)
+           doy - 243) # subtract out the median doy (see below)
 this.year <- format(Sys.Date(), "%Y") %>% as.numeric()
 pcod_catch <- join_event_catch(start_year = 2003, end_year = this.year, survey_region = c("NBS", "SEBS"), tsn = 164711,
                 trawl_method = "S", gear = "CAN", catch0 = TRUE, lhs = "A0") 
@@ -42,6 +43,13 @@ table(is.na(pcod_lngs$corrected_lng)) # okay lengths look good
 pcod_lng_size <- pcod_lngs %>%
   group_by(station_id) %>%
   dplyr::summarise(num_lng = n()) # 451 stations sampled
+
+## look at median and mean doy
+median.doy <- pcod_lngs %>%
+  group_by(station_id) %>%
+  summarise(mean.doy = mean(doy)) %>%
+  summarise(med = median(mean.doy),
+            mean = mean(mean.doy)) # median 243 / mean at 245
 
 catch_prop <- left_join(pcod_catch, pcod_lng_size, by = "station_id") %>%
   group_by(station_id) %>%
@@ -127,8 +135,9 @@ pcod_lngs_utm <- add_utm_columns(lngs,
                   ll_names = c("eq_longitude", "eq_latitude"),
                   utm_names = c("X", "Y"),
                   ll_crs = 4326,
-                  units = "km") # units should be in km, but sf generally requires m (fyi)
+                  units = "km") %>% # units should be in km, but sf generally requires m (fyi)
 # uses 32603 UTM Zone 3N
+  mutate(sample_year = as.factor(sample_year))
 plot(pcod_lngs_utm$X, pcod_lngs_utm$Y)
 ```
 
@@ -143,12 +152,13 @@ mesh <- make_mesh(pcod_lngs_utm,
 ```{r}
 fit <- sdmTMB(data = pcod_lngs_utm,
               # removes the intercept (0)
-              log(corrected_lng) ~ 0 + as.factor(sample_year) + s(scale_doy),
+              corrected_lng ~ 0 + as.factor(sample_year) + s(scale_doy),
               mesh = mesh,
               # needs to be here if you're estimating a spatiotemporal field
               time = "sample_year",
               # could also try lognormal(link = "log")
-              family = gaussian(link = "identity"),
+              # trying also gaussian with log link
+              family = gaussian(link = "log"),
               spatial = "on",
               # each year independently estimated
               spatiotemporal = "IID",
@@ -205,7 +215,7 @@ plot(bs.grid)
 
 ## replicate df across years and include any other variables we inlcude in our fit of the model
 ## i.e., depth tmeperature etc
-bs.grid.year <- replicate_df(bs.grid, "sample_year", unique(pcod_lngs$sample_year))
+bs.grid.year <- replicate_df(bs.grid, "sample_year", as.factor(unique(pcod_lngs$sample_year)))
 bs.grid.doy <- replicate_df(bs.grid.year, "scale_doy", 0) # between 235 and 236 is ~0
 
 
@@ -267,10 +277,10 @@ lng.avg.spatial <- ggplot() +
   theme(text = element_text(size = 16))
 
 
-# ggsave(filename = "figures/predicted_lng_year_050626.png", plot = lng.by.year,
+# ggsave(filename = "figures/predicted_lng_yearmap_050626.png", plot = lng.by.year,
 #        height = 14, width = 14)
 # 
-# ggsave(filename = "figures/pred_lng_avg_spatial_052626.png", plot = lng.avg.spatial,
+# ggsave(filename = "figures/pred_lng_avg_spatialmap_052626.png", plot = lng.avg.spatial,
 #        height = 14, width = 14)
 ```
 
@@ -279,6 +289,32 @@ lng.avg.spatial <- ggplot() +
 ```{r}
 predictions_tmb <- predict(fit, newdata = bs.grid.doy, return_tmb_object = T)
 
-visreg(fit, plot = F)
+vr <- visreg(fit, xvar = "sample_year", 
+             cond=list(scale_doy = 0), # at 0 which  means at 243
+             plot = FALSE, 
+             scale = "response")
+
+
+
+# partials<-vr$res
+# partials$SPECIES<-sp
+# fit<-vr$fit
+# fit$SPECIES<-sp   
+
+
+pred.length <- vr$fit %>%
+  mutate(sample_year = as.character(sample_year),
+         sample_year = as.numeric(sample_year)) %>%
+  complete(sample_year = 2003:2025) %>%
+  ggplot() +
+  geom_point(aes(x = sample_year, y = visregFit)) +
+  geom_errorbar(aes(x = sample_year, y = visregFit,
+                      ymin = visregLwr, ymax = visregUpr), width = 0.2) +
+  theme_bw() +
+  theme(text = element_text(size = 18)) +
+  labs(x = "Year", y = "Predicted length (mm, August 31)")
+
+# ggsave(filename = "figures/pred_lng_ts_050726.png", plot = pred.length,
+#        width = 12, height = 10)
 ```
 
