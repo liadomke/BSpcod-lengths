@@ -44,6 +44,8 @@ pcod_lng_size <- pcod_lngs %>%
   group_by(station_id) %>%
   dplyr::summarise(num_lng = n()) # 451 stations sampled
 
+nrow(pcod_lngs)
+
 ## look at median and mean doy
 median.doy <- pcod_lngs %>%
   group_by(station_id) %>%
@@ -62,6 +64,11 @@ hist(catch_prop$proportion_sampled)
 # none with a proportion greater than 1 which is good
 filter(catch_prop, proportion_sampled > 1)
 
+
+pcod_lngs %>%
+  group_by(region) %>%
+  dplyr::summarise(num = n(),
+                   mean = mean(n()))
 
 # clean up the pcod length dataframe
 lngs <- dplyr::select(pcod_lngs, c(sample_year, eq_latitude, eq_longitude, scientific_name,
@@ -125,6 +132,17 @@ ggplot() +
                breaks = c(-50, -70, -150), color = "black") +
   # use the 360 coords for longitude (so -150 + 360)
   coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F)
+
+ggplot() +
+  geom_sf(data = pcod_lngs_sf, aes()) +
+  geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+               breaks = c(-50, -70, -150), color = "black") +
+  # use the 360 coords for longitude (so -150 + 360)
+  coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
+  facet_wrap(~sample_year)
+
+lng.2023 <- filter(pcod_lngs_sf, sample_year == 2023)
 ```
 
 

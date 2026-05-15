@@ -17,6 +17,8 @@ library(tidyverse)
 library(ggplot2)
 library(sdmTMB)
 library(patchwork)
+library(sf)
+library(marmap)
 ```
 
 # data
@@ -26,7 +28,42 @@ this.year <- format(Sys.Date(), "%Y") %>% as.numeric()
 pcod_catch <- join_event_catch(start_year = 2003, end_year = this.year, survey_region = c("NBS", "SEBS"), tsn = 164711,
                 trawl_method = "S", gear = "CAN", catch0 = TRUE) 
 # note akfin upload date, if in the upload date says some time in Jan 2026 then the pcod data hasn't been updated to include the correct pcod cut off point for 140 mm
+
+pcod_catch_nets <- join_event_catch(start_year = 2003, end_year = this.year, survey_region = c("NBS", "SEBS"), tsn = 164711,
+                trawl_method = "S", gear = "NETS156", catch0 = TRUE) 
 ```
+
+# create base/bathy maps
+```{r}
+# make sure the base map / bathy is created with the advanced sf library 
+sf_use_s2(TRUE)
+
+# need to use world not world2hires cause that one is hella old and doesn't plot correctly
+bs_map <- maps::map("world", regions = c("USA:Alaska", "Russia"), 
+                    fill = TRUE, plot = FALSE, wrap = c(0, 360)) %>%
+  st_as_sf(crs = 4326) 
+
+# Use bounding box, have to add 360 to the bbox coords
+# xmin = 185 (-175), xmax = 202 (-155)
+bbox_360 <- st_bbox(c(xmin = 180, xmax = 210, ymin = 50, ymax = 68), 
+                    crs = st_crs(bs_map))
+
+# crop 
+# Using st_make_valid helps w/ messy polys
+bs_base <- bs_map %>% 
+  st_make_valid() %>% 
+  st_intersection(st_as_sfc(bbox_360)) %>%
+  st_shift_longitude()
+
+bs_croppedUTM <- bs_base %>%
+  st_transform(crs = 32602) # Move to UTM Zone 2N
+
+#read in bathymetry file.  
+bathline <- getNOAA.bathy(-180,-155,53,68)
+
+bathline.xyz <- as.xyz(bathline)
+```
+
 
 go through some of the basic steps for sdmTMB 
 
@@ -52,27 +89,44 @@ hist(pcod_catch$total_catch_number) # kinda looks zero inflated :(
 table(pcod_catch$lhs_code, pcod_catch$total_catch_number > 0)
 
 pcod_catch_a0 <- filter(pcod_catch, lhs_code == "A0")
+
+filter(pcod_catch_a0, is.na(effort)) # mising effort at DY1408, station 20140308022
+
+test <-filter(pcod_catch_a0, total_catch_weight < 0)
+
+sample.size <-pcod_catch_a0 %>%
+  group_by(sample_year, region) %>%
+  dplyr::summarise(total_catch = sum(total_catch_number),
+                   total_weight = sum(total_catch_weight))
+
+pcod_catch_a0 %>%
+  group_by(region) %>%
+  dplyr::summarise(mean_catch = mean(total_catch_number))
 ```
 
-## add utms & mesh
+## add utm columns
 ```{r}
-catch.32603 <- add_utm_columns(pcod_catch_a0,
-                ll_names = c("eq_longitude", "eq_latitude")) %>%
-  dplyr::select(c(sample_year, station_id, master_station_name:region, eq_time:eq_longitude, effort, effort_units, 
+catch.32603 <- pcod_catch_a0 %>%
+  filter(!is.na(effort)) %>% # remove instance of missing effort 20140308022
+  filter(total_catch_weight != -999) %>% # remove weird catch value, that should be NA
+  add_utm_columns(ll_names = c("eq_longitude", "eq_latitude"),
+                ll_crs = 4326,
+                units = "km",
+                utm_names = c("X", "Y")) %>%
+  dplyr::select(c(sample_year, station_id, master_station_name:region, 
+                  eq_time:eq_longitude, effort, effort_units, 
                   species_tsn:total_catch_weight, X, Y)) %>%
-  mutate(cpue = total_catch_number / effort)
+  mutate(cpue = total_catch_number / effort,
+         total_catch_weight = total_catch_weight / 1000)
 # this uses CRS 32603
+```
 
-wgs <- ggplot() +
-  geom_point(aes(eq_longitude, eq_latitude), data = catch.32603)
-
-utm <- ggplot() +
-  geom_point(aes(X, Y), data = catch.32603)
-
-wgs + utm
-
+## make mesh
+```{r}
 # this is somewhat of a high number of knots (I think) but lets try it out for now
-mesh <- make_mesh(catch.32603, c("X", "Y"), n_knots = 80)
+mesh <- make_mesh(catch.32603, 
+                  c("X", "Y"), 
+                  n_knots = 80)
 plot(mesh)
 # might want to consider some kind of barrier here to make sure that we're not trying to make a correlation matrix thingy with places with no data that don't make sense
 ```
@@ -81,12 +135,13 @@ plot(mesh)
 
 this is a first pass to see if this converges but these are why i think i'm making these decisions
 ```{r}
-# this model estaimtes: independent year effects (because of sample_year in model formula),
-# a
+# this model estimates: independent year effects 
+# (because of sample_year in model formula),
 fit1 <- sdmTMB(
   data = catch.32603,
   # we're curious about the total_catch_number (abundance) that may vary by time (so estimating a diff parameter for each year) 
-  total_catch_number ~ 0 + as.factor(sample_year),
+  total_catch_number ~ 1 + as.factor(sample_year),
+  offset = log(catch.32603$effort),
   # this is the mesh we created above that (we think) is a finer scale mesh, can be coarser if conversion issues arise
   mesh = mesh,
   # since we have spatio temporal fields on (w/ iid) we need to indicate what our time column is
@@ -97,32 +152,70 @@ fit1 <- sdmTMB(
   # spatiotmeporal field is iid meaning each year is independently estimated 
   # this is another spot we could loosen up on flexibility if it doesn't converge (i.e., ar1 or rw)
   spatiotemporal = "IID",
+  # spatial is on when spatiotemporal is off, but it can be on with spatiotemporal
+  spatial = "off", 
   # anisotropy v isotrophy this is the decorrelation assumptions with Matern distance. 
   # basically it assume that the decorrelation dist the same E-W and N-S however in the BS 
   # we would expect that there would be greater correlation along shelf (NW/SE) than across shelf E-W
   # in general keep unless its unestimable 
   anisotropy = TRUE
 )
+tidy(fit1, "ran_pars")
+```
 
-fit1
+weight model fit
+```{r}
+fit.wgt <- sdmTMB(
+  data = catch.32603,
+  # we're curious about the total_catch_number (abundance) that may vary by time (so estimating a diff parameter for each year) 
+  total_catch_weight ~ 0 + as.factor(sample_year),
+  offset = log(catch.32603$effort),
+  # this is the mesh we created above that (we think) is a finer scale mesh, can be coarser if conversion issues arise
+  mesh = mesh,
+  # since we have spatio temporal fields on (w/ iid) we need to indicate what our time column is
+  time = "sample_year",
+  # tweedie family is a good starting point generally used with continuous and/or zero inflated biomass data the
+  # catch data is perhaps not the most appropriate but we'll start here, maybe poisson with a catch offset would be better?
+  family = tweedie(link = "log"), 
+  # spatiotmeporal field is iid meaning each year is independently estimated 
+  # this is another spot we could loosen up on flexibility if it doesn't converge (i.e., ar1 or rw)
+  spatiotemporal = "IID",
+  spatial = "off", 
+  # anisotropy v isotrophy this is the decorrelation assumptions with Matern distance. 
+  # basically it assume that the decorrelation dist the same E-W and N-S however in the BS 
+  # we would expect that there would be greater correlation along shelf (NW/SE) than across shelf E-W
+  # in general keep unless its unestimable 
+  anisotropy = TRUE
+)
+```
 
+
+
+## model checks
+```{r}
+# passes the standard sanity checks
+sanity(fit1); sanity(fit.wgt)
 # things of interest here, 
 #' dispersion - how much variability after account for main effects and spatial/spatiotemporal 
 #' matern range - indicates if smooth or patchy
 #' spatiial SD if high means theres strong peaks / valleys in spatial fields, if 0 no spatial variability
 #' 
-tidy(fit1, "ran_pars")
+tidy(fit1, "ran_pars"); tidy(fit.wgt, "ran_pars")
 #' range smooth or patchy (but which is which)
-```
 
-## model checks
-```{r}
 # looking for approximately normal along the line
 catch.32603$resid <- residuals(fit1, type = "mle-mvn")
 qqnorm(catch.32603$resid)
 abline(0,1)
 
 hist(catch.32603$resid)
+
+# weight residuals
+catch.32603$wgt_resid <- residuals(fit.wgt, type = "mle-mvn")
+qqnorm(catch.32603$wgt_resid)
+abline(0,1)
+
+hist(catch.32603$wgt_resid)
 
 # spatial residuals
 # here we're revuing the data to make sure we're not seeing patterns of clustering of
@@ -133,38 +226,10 @@ ggplot() +
   facet_wrap(~sample_year)
 # kinda looks okay?
 
-# passes the standard sanity checks
-sanity(fit1)
-```
-
-## predict obs
-```{r}
-preds <- predict(fit1)
-
-#' est: fixed + spatial + spatiotemporal (use this for maps and indices)
-#' est_non_rf - fixed effects only, use this to understand the covariate-driven signal (in our case here this would
-#' be the temporal effects)
-#' omega_s - spatial random effects use this to see persistent spatial deviations 
-#' epsilon_st - spatiotemporal random effects, will tell you/show year-specific anomalies
-
-
-# i think this is the spatiotemporal random effects fields
-preds %>% 
-  ggplot(aes(x=X, y=Y, color=epsilon_st)) + 
-  #theme_linedraw() +
-  scale_color_viridis_c() +
-  geom_point() +
-  facet_wrap(~sample_year) +
-  ggtitle("Spatiotemporal RE (link space)",subtitle="Spatiotemporal Model")
-
-# to includes overall estimate that includes the main effects
-
-preds %>%
-  ggplot(aes(x =X, y = Y, color = est)) +
-  scale_color_viridis_c() +
-  geom_point() +
+ggplot() +
+  geom_point(data = catch.32603, aes(X, Y, color = wgt_resid)) +
+  scale_color_gradient2() +
   facet_wrap(~sample_year)
-  
 ```
 
 ## prediction grids
@@ -210,15 +275,97 @@ bs.grid.yrs <- replicate_df(bs.grid, "sample_year", unique(catch.32603$sample_ye
 
 ## predict across grid
 ```{r}
-preds <- predict(fit1, newdata = bs.grid.yrs, return_tmb_object = F)
+preds <- predict(fit1, newdata = bs.grid.yrs, return_tmb_object = F) %>% # catch
+  mutate(Y_m = Y * 1000,
+         X_m = X * 1000) # sf requires meters
+preds.wgt <- predict(fit.wgt, newdata = bs.grid.yrs, return_tmb_object = F) %>%  # weight
+  mutate(Y_m = Y * 1000,
+         X_m = X * 1000) # sf requires meters
 
-preds %>%
-  ggplot(aes(X, Y, fill =est)) +
-  scale_fill_viridis_c() +
-  geom_raster() +
-  facet_wrap(~sample_year)
+preds.sf <- st_as_sf(preds, coords = c("X_m", "Y_m"), crs = 32603) %>%
+  st_transform(crs = 4326) %>%
+  st_shift_longitude()
+
+preds.wgt.sf <- st_as_sf(preds.wgt, coords = c("X_m", "Y_m"), crs = 32603) %>%
+  st_transform(crs = 4326) %>%
+  st_shift_longitude()
+
+# create sf of catch stations
+catch.sf <- catch.32603 %>%
+  mutate(X_m = X * 1000,
+         Y_m = Y * 1000) %>%
+  st_as_sf(coords = c("X_m", "Y_m"), crs = 32603) %>%
+  st_transform(crs = 4326) %>%
+  st_shift_longitude()
+
+# predict the catch across the grid, catch needs to be logged because of tweedie log link
+num.spatiotemp.preds.map <- ggplot() +
+  geom_sf(preds.sf, mapping = aes(fill = est, color = est), pch = 22) +
+  scale_fill_viridis_c() + scale_color_viridis_c() +
+  geom_sf(catch.sf, mapping = aes(shape = total_catch_number > 0)) +
+  scale_shape_manual(values = c(4, 19)) +
+  geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+               breaks = c(-50, -70, -150), color = "black") +
+  # use the 360 coords for longitude (so -150 + 360)
+  coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
+  facet_wrap(~as.factor(sample_year)) +
+  labs(x = "Longitude", y = "Latitude", color = "Log Catch Number",
+       fill = "Log Catch Number") +
+  theme(text = element_text(size = 16))
+
+# predict the catch weight across the grid, catch weight needs to be logged because of the 
+# tweedie log link
+wgt.spatiotemp.preds.map <- ggplot() +
+  geom_sf(preds.wgt.sf, mapping = aes(fill = est, color = est), pch = 22) +
+  scale_fill_viridis_c() + scale_color_viridis_c() +
+  geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+  geom_sf(catch.sf, mapping = aes(shape = total_catch_weight > 0)) +
+  scale_shape_manual(values = c(4, 19)) +
+  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+               breaks = c(-50, -70, -150), color = "black") +
+  # use the 360 coords for longitude (so -150 + 360)
+  coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
+  facet_wrap(~as.factor(sample_year)) +
+  labs(x = "Longitude", y = "Latitude", color = "Log Catch Weight",
+       fill = "Log Catch Weight") +
+  theme(text = element_text(size = 16))
+
+# ggsave(filename = "figures/catch_num_sptemp_map_051226.png", plot = num.spatiotemp.preds.map,
+#        height = 14, width = 14)
+# ggsave(filename = "figures/catch_wgt_sptemp_map_051226.png", plot = wgt.spatiotemp.preds.map,
+#        height = 14, width = 14)
 ```
 
+## predict obs
+```{r}
+preds <- predict(fit1)
+
+#' est: fixed + spatial + spatiotemporal (use this for maps and indices)
+#' est_non_rf - fixed effects only, use this to understand the covariate-driven signal (in our case here this would
+#' be the temporal effects)
+#' omega_s - spatial random effects use this to see persistent spatial deviations 
+#' epsilon_st - spatiotemporal random effects, will tell you/show year-specific anomalies
+
+
+# i think this is the spatiotemporal random effects fields
+preds %>% 
+  ggplot(aes(x=X, y=Y, color=epsilon_st)) + 
+  #theme_linedraw() +
+  scale_color_viridis_c() +
+  geom_point() +
+  facet_wrap(~sample_year) +
+  ggtitle("Spatiotemporal RE (link space)",subtitle="Spatiotemporal Model")
+
+# to includes overall estimate that includes the main effects
+
+preds %>%
+  ggplot(aes(x =X, y = Y, color = est)) +
+  scale_color_viridis_c() +
+  geom_point() +
+  facet_wrap(~sample_year)
+  
+```
 
 ## get indicies
 jk we're going to wait on this cause we want to make a prediction grid first
@@ -228,10 +375,19 @@ jk we're going to wait on this cause we want to make a prediction grid first
 #get_index(index_preds)
 
 index_preds <- predict(fit1, newdata = bs.grid.yrs, return_tmb_object = TRUE)
-index <- get_index(index_preds)
+index <- get_index(index_preds, bias_correct = T)
+# this is catch numbers
+
+index_preds_wgt <- predict(fit.wgt, newdata = bs.grid.yrs, return_tmb_object = TRUE)
+index.wgt <- get_index(index_preds_wgt, bias_correct = T)
+
 
 ggplot(index) +
-  geom_point(aes(sample_year, est)) +
+  geom_point(aes(sample_year, log(est))) +
+  geom_errorbar(aes(sample_year, ymin = lwr, ymax = upr))
+
+ggplot(index.wgt) +
+  geom_point(aes(sample_year, log(est))) +
   geom_errorbar(aes(sample_year, ymin = lwr, ymax = upr))
 
 cog <- get_cog(index_preds)
