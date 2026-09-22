@@ -334,6 +334,7 @@ fit.wgt <- sdmTMB(
 
 ## model checks
 ```{r}
+library(sfheaders)
 # passes the standard sanity checks
 sanity(fit1); sanity(fit.wgt)
 # things of interest here, 
@@ -341,7 +342,7 @@ sanity(fit1); sanity(fit.wgt)
 #' matern range - indicates if smooth or patchy
 #' spatiial SD if high means theres strong peaks / valleys in spatial fields, if 0 no spatial variability
 # how do the two spatial on and spatial off models do
-tidy(fit1, "ran_pars"); tidy(fit2, "ran_pars")
+tidy(fit1, "ran_pars"); #tidy(fit2, "ran_pars")
 # the spatial E paramter gets larger when spatial is off (duh)
 tidy(fit.wgt, "ran_pars")
 #' range smooth or patchy (but which is which)
@@ -385,7 +386,7 @@ abline(0,1)
 hist(catch.32603$wgt_resid)
 
 # spatial residuals
-# here we're revuing the data to make sure we're not seeing patterns of clustering of
+# here we're reviewing the data to make sure we're not seeing patterns of clustering of
 # positive and negative residuals together
 ggplot() +
   geom_point(data = catch.32603, aes(X, Y, color = wgt_resid)) +
@@ -490,9 +491,19 @@ num.spatiotemp.preds.map <- ggplot() +
   theme(text = element_text(size = 16))
 
 # spatial field
-ggplot() +
+num.spatial.map <- ggplot() +
   geom_sf(preds.sf, mapping = aes(fill = omega_s, color = omega_s), pch = 22) +
-  scale_fill_viridis_c() + scale_color_viridis_c()
+  scale_fill_viridis_c() + scale_color_viridis_c() +
+  #Mariela added below geom_sf, geom_contour, coord_sf, labs, theme lines to spatial map - 9/21/26
+  geom_sf(catch.sf, mapping = aes())+
+  geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+               breaks = c(-50, -70, -150), color = "black") +
+  # use the 360 coords for longitude (so -150 + 360)
+  coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
+  labs(x = "Longitude", y = "Latitude", color = "",
+       fill = "") +
+  theme(text = element_text(size = 22))
 
 # predict the catch weight across the grid, catch weight needs to be logged because of the 
 # tweedie log link
@@ -515,6 +526,9 @@ wgt.spatiotemp.preds.map <- ggplot() +
 #        height = 14, width = 14)
 # ggsave(filename = "figures/catch_wgt_sptemp_map_051226.png", plot = wgt.spatiotemp.preds.map,
 #        height = 14, width = 14)
+# ggsave(filename = "figures/catch_num_spatial_map_092126.png", plot = num.spatial.map,
+#        height = 14, width = 14)
+
 ```
 
 ## predict obs

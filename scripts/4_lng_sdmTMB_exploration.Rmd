@@ -459,8 +459,8 @@ lng.by.year <- ggplot() +
   scale_color_viridis_c() + scale_fill_viridis_c() +
   geom_sf(data = pcod_lngs_sf, aes()) +
   geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
-  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
-               breaks = c(-50, -70, -150), color = "black") +
+  # geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+  #              breaks = c(-50, -70, -150), color = "black") +
   # use the 360 coords for longitude (so -150 + 360)
   coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
   facet_wrap(~as.factor(sample_year)) +
@@ -475,25 +475,29 @@ lng.avg.spatial <- ggplot() +
   scale_color_viridis_c() + scale_fill_viridis_c() +
   geom_sf(data = pcod_lngs_sf, aes()) +
   geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
-  geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
-               breaks = c(-50, -70, -150), color = "black") +
+  # geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+  #              breaks = c(-50, -70, -150), color = "black") +
   # use the 360 coords for longitude (so -150 + 360)
   coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
   labs(x = "Longitude", y = "Latitude", color = "Predicted length (mm)",
        fill = "Predicted length (mm)") +
-  theme(text = element_text(size = 16))
+  theme(text = element_text(size = 22))
 
 
 # ggsave(filename = "figures/predicted_lng_yearmap_050626.png", plot = lng.by.year,
 #        height = 14, width = 14)
-# 
-# ggsave(filename = "figures/pred_lng_red_avg_spatialmap_072826.png", plot = lng.avg.spatial,
+# ggsave(filename = "figures/predicted_lng_yearmap_073026.png", plot = lng.by.year,
+#        height = 14, width = 14)
+# # 
+# ggsave(filename = "figures/pred_lng_red_avg_spatialmap_092126.png", plot = lng.avg.spatial,
 #        height = 14, width = 14)
 ```
 
 
 ## investigate avg length by year
 ```{r}
+library(visreg)
+
 predictions_tmb <- predict(fit,
                            newdata = bs.grid.doy, return_tmb_object = T)
 
