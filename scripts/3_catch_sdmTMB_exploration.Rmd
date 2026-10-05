@@ -111,6 +111,9 @@ pcod_catch_a0 %>%
 ## clean data 
 ```{r}
 pcod_catch_a0 <- pcod_catch %>%
+  # remove the norton sound stations in 2007 because we don't have any confidence in those data
+  # likely those are primarily another cod and not pacific code. So remove and pretent no sampling took place there
+  filter(!(sample_year == 2007 & eq_latitude > 61.6)) %>%
   filter(lhs_code == "A0",
          total_catch_weight != -999,
          !(is.na(effort))) %>%
@@ -217,17 +220,17 @@ fit2 <- sdmTMB(
 
 # what if we changed the distributional form
 
-fit3 <- sdmTMB(
-  data = catch.32603,
-  total_catch_number ~ 1 + as.factor(sample_year) + scale_doy2,
-  offset = log(catch.32603$effort),
-  mesh = mesh,
-  time = "sample_year",
-  family = delta_gamma(link1 = "log", link2 = "log"), 
-  spatiotemporal = list("iid", "iid"),
-  spatial = list("on", "on"), 
-  anisotropy = TRUE
-) # okay noted... doesn't even converge
+# fit3 <- sdmTMB(
+#   data = catch.32603,
+#   total_catch_number ~ 1 + as.factor(sample_year) + scale_doy2,
+#   offset = log(catch.32603$effort),
+#   mesh = mesh,
+#   time = "sample_year",
+#   family = delta_gamma(link1 = "log", link2 = "log"), 
+#   spatiotemporal = list("iid", "iid"),
+#   spatial = list("on", "on"), 
+#   anisotropy = TRUE
+# ) # okay noted... doesn't even converge
 
 # slightly better fit with spatial field on. Best way of evaluating this would be cross 
 AIC(fit1); AIC(fit2) # validation
@@ -363,7 +366,7 @@ p_res <- as.grob(~DHARMa::plotResiduals(resids))
 # combine residual plots
 dharma_plots <- wrap_plots(p_qq, p_res) +
 plot_annotation(title = paste("DHARMa Diagnostics"))
-#ggsave(plot = dharma_plots, filename = here("figures", "pcod_catch_tweedie_diagnostics.png"))
+#ggsave(plot = dharma_plots, filename = here("figures", paste0("pcod_catch_tweedie_diagnostics_", Sys.Date(), ".png")))
 
 catch.32603$resid <- resids$scaledResiduals
 
@@ -376,7 +379,7 @@ spatials <- ggplot(catch.32603) +
   coord_fixed() +
   theme_minimal()
 
-#ggsave(plot = spatials, filename = here("figures", "pcod_catch_tweedie_spatial_diagnostics.png"))
+#ggsave(plot = spatials, filename = here("figures", paste0("pcod_catch_tweedie_spatial_diagnostics_", Sys.Date(), ".png")))
 
 # weight residuals
 catch.32603$wgt_resid <- residuals(fit.wgt, type = "mle-mvn")
@@ -486,11 +489,15 @@ num.spatiotemp.preds.map <- ggplot() +
   # use the 360 coords for longitude (so -150 + 360)
   coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
   facet_wrap(~as.factor(sample_year)) +
-  labs(x = "Longitude", y = "Latitude", color = "Log Catch Number",
-       fill = "Log Catch Number", shape = "More than 0 fish caught") +
+  labs(x = "Longitude", y = "Latitude", color = expression("Log catch (no./km"^2*")"),
+       fill = expression("Log catch (no./km"^2*")"), shape = "More than 0 fish caught") +
   theme(text = element_text(size = 16))
 
-# spatial field
+# spatial field, these represent the log catch deviation from baseline or avg. So a value of 4, is an increase
+# of exp(4) = 54.6. so abundance is 54.6 times higher than average.This makes it kinda wild when talking about what percent increase
+# percent increase = (multiplier -1) * 100; %increase = (54.6 - 1) * 100 =5360 % increase
+# if the value is low so -2 then it'd be: exp(-2) = 0.135. So abundance is 0.135 lower than baseline which is approximately 
+# equal to 86.5% lower (0.135 -1 =  -0.865 * 100 = 86.5 % lower).
 num.spatial.map <- ggplot() +
   geom_sf(preds.sf, mapping = aes(fill = omega_s, color = omega_s), pch = 22) +
   scale_fill_viridis_c() + scale_color_viridis_c() +
@@ -501,9 +508,10 @@ num.spatial.map <- ggplot() +
                breaks = c(-50, -70, -150), color = "black") +
   # use the 360 coords for longitude (so -150 + 360)
   coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
-  labs(x = "Longitude", y = "Latitude", color = "",
-       fill = "") +
+  labs(x = "Longitude", y = "Latitude", color = expression("Log catch deviations from average (no./km"^2*")"),
+       fill = expression("Log catch deviations from average (no./km"^2*")")) +
   theme(text = element_text(size = 22))
+
 
 # predict the catch weight across the grid, catch weight needs to be logged because of the 
 # tweedie log link
@@ -522,11 +530,11 @@ wgt.spatiotemp.preds.map <- ggplot() +
        fill = "Log Catch Weight") +
   theme(text = element_text(size = 16))
 
-# ggsave(filename = "figures/catch_num_sptemp_map_072726.png", plot = num.spatiotemp.preds.map,
+# ggsave(filename = paste0("figures/catch_num_sptemp_map_", Sys.Date(), ".png"), plot = num.spatiotemp.preds.map,
 #        height = 14, width = 14)
 # ggsave(filename = "figures/catch_wgt_sptemp_map_051226.png", plot = wgt.spatiotemp.preds.map,
 #        height = 14, width = 14)
-# ggsave(filename = "figures/catch_num_spatial_map_092126.png", plot = num.spatial.map,
+# ggsave(filename = paste0("figures/catch_deviations_from_baseline", Sys.Date(), ".png"), plot = num.spatial.map,
 #        height = 14, width = 14)
 
 ```
@@ -584,7 +592,7 @@ index <- get_index(index_preds, bias_correct = T, area = 1)
 library(scales)
 ggplot(data = index, aes(sample_year, est)) +
   geom_pointrange(aes(sample_year, ymin = lwr, ymax = upr)) +
-  scale_y_continuous(labels = label_comma()) +
+  scale_y_continuous(labels = scales::label_comma()) +
   labs(x = "Year", y = "Relative index of abundance (no.)")
 
 # ggplot(index.wgt) +
@@ -596,8 +604,8 @@ ggplot(data = index, aes(sample_year, est)) +
 # for final interpretation bias_correct = T but you have likely include a nsplit argument 
 # and split up the predictions and do it separately. You could also predict on a coarser
 # grid, right now we use a grid of 10 x 10 km which is decent
-cog <- get_cog(index_preds, bias_correct = F, format = "wide")
-head(cog)
+# cog <- get_cog(index_preds, bias_correct = F, format = "wide")
+# head(cog)
 
 # trying a coarse grid to predict
 cog2 <- get_cog(index_preds_coarse, bias_correct = T, format = "wide")
@@ -666,7 +674,7 @@ cog_plot <- ggplot() +
   geom_errorbarh(data = cog.error, aes(y = est_x_4326, xmin = lon_min, xmax = lon_max,
                                        color = sample_year)) +
   coord_sf(crs = st_crs(4326)) +
-  ggrepel::geom_label_repel(data = filter(cog.error, sample_year == 2007), 
+  ggrepel::geom_label_repel(data = cog.error, 
                            aes(x = est_y_4326, y = est_x_4326, label = sample_year)) +
   scale_colour_viridis_c() +
   labs(x = "Longitude", y = "Latitude") +
@@ -674,7 +682,7 @@ cog_plot <- ggplot() +
   #              breaks = c(-50, -70, -150), color = "black") +
   theme_minimal()
 
-# ggsave(plot = cog_plot, filename = here("figures", "Pcod_abund_cog_4326.png"),
+# ggsave(plot = cog_plot, filename = here("figures", paste0("Pcod_abund_cog_4326", Sys.Date(), ".png")),
 #        height = 10, width = 14)
 ```
 

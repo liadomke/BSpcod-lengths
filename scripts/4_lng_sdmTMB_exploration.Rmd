@@ -24,9 +24,9 @@ library(visreg)
 # data
 ```{r}
 # pre curated length data (see 1_extract_lng_data.Rmd)
-pcod_lngs <- read.csv("data/pcod_length_corrected_050426.csv") %>% 
+pcod_lngs <- read.csv("data/pcod_length_corrected_2026-10-02.csv") %>% 
   # make sure the lngs are only ones below which we are sure are age 0 
-  filter(length < 154) %>% dplyr::select(-X) %>%
+  filter(length < 154) %>% 
   mutate(doy = yday(haul_date),
          median_doy = median(doy),
          scale_doy = doy - median_doy,
@@ -40,7 +40,8 @@ this.year <- format(Sys.Date(), "%Y") %>% as.numeric()
 
 
 pcod_catch <- join_event_catch(start_year = 2003, end_year = this.year, survey_region = c("NBS", "SEBS"), tsn = 164711,
-                trawl_method = "S", gear = "CAN", catch0 = TRUE, lhs = "A0") 
+                trawl_method = "S", gear = "CAN", catch0 = TRUE, lhs = "A0") %>%
+  filter(gear_performance != "Q")
 
 ```
 
@@ -72,8 +73,7 @@ filter(catch_prop, proportion_sampled > 1)
 
 pcod_lngs %>%
   group_by(region) %>%
-  dplyr::summarise(num = n(),
-                   mean = mean(n()))
+  dplyr::summarise(num = n())
 
 # clean up the pcod length dataframe
 lngs <- dplyr::select(pcod_lngs, c(sample_year, eq_latitude, eq_longitude, region, scientific_name,
@@ -127,11 +127,14 @@ bathline.xyz <- as.xyz(bathline)
 
 plot raw data
 ```{r}
+# this is removing some fish sampled in 2007 in norton sound that show up as larger than 
+# other fish - those were assuredly saffron cod mistaken for pcod. so we need to remove them
 pcod_lngs_sf <- lngs %>%
   filter(!(sample_year == 2007 & eq_latitude > 61.6)) %>%
   st_as_sf(coords = c("eq_longitude", "eq_latitude"), crs = 4326) %>%
   st_shift_longitude()
 
+# you can see now there are no pcod sampled in norton sound ever (or below in 2007)
 ggplot() +
   geom_sf(data = pcod_lngs_sf, aes()) +
   geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
@@ -167,6 +170,7 @@ pcod_lngs_utm <- add_utm_columns(lngs,
   filter(!(sample_year == 2007 & eq_latitude > 61.6)) # to include the few fish caught at 61.51,
 # this drops 200 lngs
 
+# looks good
 plot(pcod_lngs_utm$X, pcod_lngs_utm$Y)
 ```
 
@@ -314,8 +318,11 @@ spatials2 <- ggplot(pcod_lngs_utm) +
 
 dont run this unless you really want to - its takes forever and sometimes doesn't converge if you're using the reduced model (no norton sound data in 2007)
 ```{r eval=FALSE, include=FALSE}
-fold_vector <- as.numeric(as.factor(pcod_lngs_utm$sample_year))
+#fold_vector <- as.numeric(as.factor(pcod_lngs_utm$sample_year))
+#clust <- as.numeric(as.factor(pcod_lngs_utm$sample_year))
+#fold_id <- sample(rep(1:5, length.out = nrow(pcod_lngs_utm)))
 
+# i dont love how the cv perfoms with the different folds & cross validation
 # open the parallel processing 
 TMB::openmp(n = 1)
 # set up paralell processing
@@ -329,7 +336,7 @@ fit.cv <- sdmTMB_cv(data = pcod_lngs_utm,
               spatial = "on",
               spatiotemporal = "IID",
               anisotropy = TRUE,
-              fold_ids = fold_vector
+              fold_ids = fold_id
               )
 
 fit.log.cv <- sdmTMB_cv(data = pcod_lngs_utm,
@@ -340,7 +347,7 @@ fit.log.cv <- sdmTMB_cv(data = pcod_lngs_utm,
               spatial = "on",
               spatiotemporal = "IID",
               anisotropy = TRUE,
-              fold_ids = fold_vector
+              fold_ids = fold_id
               )
 
 fit.log2.cv <- sdmTMB_cv(data = pcod_lngs_utm,
@@ -351,7 +358,7 @@ fit.log2.cv <- sdmTMB_cv(data = pcod_lngs_utm,
               spatial = "off",
               spatiotemporal = "IID",
               anisotropy = TRUE,
-              fold_ids = fold_vector
+              fold_ids = fold_id
               )
 ```
 
@@ -440,9 +447,14 @@ bs.grid.doy <- replicate_df(bs.grid.year, "scale_doy2", scaled_median) # between
 ```{r}
 # predictiosn would be good for fitting the average spatial field 
 # prediction here is in link space
-predictions <- predict(fit, newdata = bs.grid.doy) %>%
+# predictions <- predict(fit, newdata = bs.grid.doy) %>%
+#   mutate(Y_m = Y * 1000,
+#          X_m = X * 1000) # sf requires meters
+
+predictions <- predict(fit.log, newdata = bs.grid.doy) %>%
   mutate(Y_m = Y * 1000,
          X_m = X * 1000) # sf requires meters
+
 
 predictions.sf <- st_as_sf(predictions, coords = c("X_m", "Y_m"), crs = 32603) %>%
   st_transform(crs = 4326) %>%
@@ -468,7 +480,10 @@ lng.by.year <- ggplot() +
        fill = "Predicted length (mm)") +
   theme(text = element_text(size = 16))
 
-# average spatial field
+# average spatial field - the spatial random effects 
+# when omega_s is exponentiated it represents the relative length anomaly across space
+# so (I think) 1 would be = to the average or baseline and 1.10 would mean that location is 10% longer than baseline
+# however we can also take some predicted or average length and identify the length deviations
 lng.avg.spatial <- ggplot() +
   geom_sf(data = predictions.sf, aes(fill = exp(omega_s), color = exp(omega_s)
                                      ), pch = 22) +
@@ -479,8 +494,27 @@ lng.avg.spatial <- ggplot() +
   #              breaks = c(-50, -70, -150), color = "black") +
   # use the 360 coords for longitude (so -150 + 360)
   coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
-  labs(x = "Longitude", y = "Latitude", color = "Predicted length (mm)",
+  labs(x = "Longitude", y = "Latitude", color = "Relative spatial length anomaly",
        fill = "Predicted length (mm)") +
+  theme(text = element_text(size = 22))
+
+# so if we wanted to display the absolute length deviation in mm lets take the average length
+mean(pcod_lngs_utm$corrected_lng) # close enough if we call it 70 mm, minus 1 to get the absolute change 
+predictions.sf$absolute_omega_s <- (exp(predictions.sf$omega_s) -1 ) * 70
+
+# absolute (mm) length deviations from average
+abs.lng.dev <- ggplot() +
+  geom_sf(data = predictions.sf, aes(fill = absolute_omega_s, color = absolute_omega_s
+                                     ), pch = 22) +
+  scale_color_viridis_c() + scale_fill_viridis_c() +
+  geom_sf(data = pcod_lngs_sf, aes()) +
+  geom_sf(data = bs_base, fill = "gray", color = "black", inherit.aes = F) +
+  # geom_contour(data = bathline.xyz, aes(x = V1 + 360, y = V2, z = V3),
+  #              breaks = c(-50, -70, -150), color = "black") +
+  # use the 360 coords for longitude (so -150 + 360)
+  coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
+  labs(x = "Longitude", y = "Latitude", color = "Length anomaly from average (mm)",
+       fill = "Length anomaly from average (mm)") +
   theme(text = element_text(size = 22))
 
 
@@ -491,22 +525,34 @@ lng.avg.spatial <- ggplot() +
 # # 
 # ggsave(filename = "figures/pred_lng_red_avg_spatialmap_092126.png", plot = lng.avg.spatial,
 #        height = 14, width = 14)
+# 
+# ggsave(filename = paste("figures/lng_spatial_anomaly_", Sys.Date(), ".png"), plot = abs.lng.dev,
+#        height = 14, width = 14)
 ```
 
 
 ## investigate avg length by year
 ```{r}
-library(visreg)
+# library(visreg)
+# 
+# predictions_tmb <- predict(fit.log,
+#                            newdata = bs.grid.doy)
+# 
+# 
+# vr <- visreg(fit.log, xvar = "sample_year", 
+#              cond=list(
+#                scale_doy2 = scaled_median, # this means 238 just in the scaled form
+#                X = mean(pcod_lngs_utm$X),
+#                Y = mean(pcod_lngs_utm$Y)
+#                ), 
+#              plot = FALSE, 
+#              scale = "response")
 
-predictions_tmb <- predict(fit,
-                           newdata = bs.grid.doy, return_tmb_object = T)
-
-vr <- visreg(fit, xvar = "sample_year", 
-             cond=list(scale_doy2 = scaled_median), # this means 238 just in the scaled form
-             plot = FALSE, 
-             scale = "response")
-
-
+library(ggeffects)
+# marginal effect of sample_year holding DOY at median
+eff <- ggpredict(fit.log, terms = "sample_year [all]")
+# Plot using ggplot
+plot(eff)
 
 # partials<-vr$res
 # partials$SPECIES<-sp
@@ -516,29 +562,29 @@ vr <- visreg(fit, xvar = "sample_year",
 
 
 
-visreg.se.fits<-  vr$fit %>%
-  mutate(sample_year = as.character(sample_year),
-         sample_year = as.numeric(sample_year)) %>%
-  complete(sample_year = 2003:2025) %>%
-  mutate(SE = (visregUpr-visregLwr)/ 3.919928)
-
-pred.length <- visreg.se.fits %>%
-  ggplot() +
-  geom_point(aes(x = sample_year, y = visregFit)) +
-  geom_errorbar(aes(x = sample_year, y = visregFit,
-                      ymin = visregLwr, ymax = visregUpr), width = 0.2) +
-  theme_bw() +
-  theme(text = element_text(size = 18)) +
-  labs(x = "Year", y = "Predicted length (mm, August 26)", title = "Reduced dataset")
-
-pred.length.se <- visreg.se.fits %>%
-  ggplot() +
-  geom_point(aes(x = sample_year, y = visregFit)) +
-  geom_errorbar(aes(x = sample_year, y = visregFit,
-                      ymin = visregFit - SE, ymax = visregFit + SE), width = 0.2) +
-  theme_bw() +
-  theme(text = element_text(size = 18)) +
-  labs(x = "Year", y = "Predicted length (mm, August 31)")
+# visreg.se.fits<-  vr$fit %>%
+#   mutate(sample_year = as.character(sample_year),
+#          sample_year = as.numeric(sample_year)) %>%
+#   complete(sample_year = 2003:2025) %>%
+#   mutate(SE = (visregUpr-visregLwr)/ 3.919928)
+# 
+# pred.length <- visreg.se.fits %>%
+#   ggplot() +
+#   geom_point(aes(x = sample_year, y = visregFit)) +
+#   geom_errorbar(aes(x = sample_year, y = visregFit,
+#                       ymin = visregLwr, ymax = visregUpr), width = 0.2) +
+#   theme_bw() +
+#   theme(text = element_text(size = 18)) +
+#   labs(x = "Year", y = "Predicted length (mm, August 26)", title = "Reduced dataset")
+# 
+# pred.length.se <- visreg.se.fits %>%
+#   ggplot() +
+#   geom_point(aes(x = sample_year, y = visregFit)) +
+#   geom_errorbar(aes(x = sample_year, y = visregFit,
+#                       ymin = visregFit - SE, ymax = visregFit + SE), width = 0.2) +
+#   theme_bw() +
+#   theme(text = element_text(size = 18)) +
+#   labs(x = "Year", y = "Predicted length (mm, August 31)")
 
 # ggsave(filename = "figures/pred_red_lng_ts_072826.png", plot = pred.length,
 #        width = 12, height = 10)
@@ -574,7 +620,7 @@ fit.temp <- sdmTMB(data = pcod_temp,
                    corrected_lng ~ s(scale_doy2) + summerSST_Z,
                     mesh = mesh,
                     time = "sample_year",
-                    family = gaussian(link = "log"),
+                    family = lognormal(link = "log"),
                     spatial = "on",
                     spatiotemporal = "IID",
                     anisotropy = TRUE
@@ -619,8 +665,8 @@ temp prediction grid
 ## replicate df across years and include any other variables we inlcude in our fit of the model
 ## i.e., depth tmeperature etc
 scaled_median <- unique(pcod_lngs_utm$scaled_median)
-mean_tempZ <- mean(pcod_temp$summerSST_Z)
-mean_temp <- mean(pcod_temp$summerSST_annualMean) # mean temp is ~7C
+mean_tempZ <- mean(pcod_temp$summerSST_Z, na.rm = T)
+mean_temp <- mean(pcod_temp$summerSST_annualMean, na.rm = T) # mean temp is ~7C
 
 bs.grid.doy <- replicate_df(bs.grid.year, "scale_doy2", scaled_median) # between 235 and 236 is ~0
 # unsure but i dont think we need to replicate by year because we dont have year in the main effects
@@ -636,7 +682,7 @@ vr.temp <- visreg(fit.temp, xvar = "summerSST_Z",
              plot = FALSE, 
              scale = "response")
 
-predict(fit.temp, newdata = data.frame(summerSST_Z = seq(min(pcod_temp$summerSST_Z, na.rm = TRUE),
+vr<- predict(fit.temp, newdata = data.frame(summerSST_Z = seq(min(pcod_temp$summerSST_Z, na.rm = TRUE),
                                                         max(pcod_temp$summerSST_Z, na.rm = TRUE), 
                                                         length.out = 100),
                                       scale_doy2 = scaled_median),
