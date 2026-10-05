@@ -495,7 +495,7 @@ lng.avg.spatial <- ggplot() +
   # use the 360 coords for longitude (so -150 + 360)
   coord_sf(xlim = c(180, 202), ylim = c(54, 66), expand = F) +
   labs(x = "Longitude", y = "Latitude", color = "Relative spatial length anomaly",
-       fill = "Predicted length (mm)") +
+       fill = "Relative spatial length anomaly") +
   theme(text = element_text(size = 22))
 
 # so if we wanted to display the absolute length deviation in mm lets take the average length
